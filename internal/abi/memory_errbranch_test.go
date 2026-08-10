@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	bintype "github.com/wago-org/wago/src/component/internal/binary"
+	bintype "github.com/wago-org/component-model/internal/binary"
 )
 
 // u32ptr returns a pointer to a uint32 literal, for TypeRef.TypeIndex.

@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/wago-org/wago/src/component/internal/binary"
+	"github.com/wago-org/component-model/internal/binary"
 )
 
 // TestLowerFlatErrors tests error conditions in LowerFlat.

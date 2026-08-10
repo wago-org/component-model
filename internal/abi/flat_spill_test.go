@@ -3,7 +3,7 @@ package abi
 import (
 	"testing"
 
-	"github.com/wago-org/wago/src/component/internal/binary"
+	"github.com/wago-org/component-model/internal/binary"
 )
 
 // TestLowerFlatSpilling tests the spilling behavior when types exceed MaxFlatParams.

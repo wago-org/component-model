@@ -3,7 +3,7 @@ package binary
 import (
 	"fmt"
 
-	"github.com/wago-org/wago/src/component/internal/leb128"
+	"github.com/wago-org/component-model/internal/leb128"
 )
 
 // This file implements leaf byte-walking helpers for the component-model

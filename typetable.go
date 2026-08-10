@@ -1,8 +1,8 @@
 package component
 
 import (
-	"github.com/wago-org/wago/src/component/internal/abi"
-	"github.com/wago-org/wago/src/component/internal/binary"
+	"github.com/wago-org/component-model/internal/abi"
+	"github.com/wago-org/component-model/internal/binary"
 )
 
 // TypeTable interns the composite types one host func's signature refers to,

@@ -5,9 +5,9 @@ import (
 	"context"
 	"sync"
 
-	"github.com/wago-org/wago/src/component/internal/binary"
-	api "github.com/wago-org/wago/src/component/internal/engine"
-	wazy "github.com/wago-org/wago/src/component/internal/engine"
+	"github.com/wago-org/component-model/internal/binary"
+	api "github.com/wago-org/component-model/internal/engine"
+	wazy "github.com/wago-org/component-model/internal/engine"
 )
 
 // CompileCache caches wazy.CompiledModule handles for core module bytes,

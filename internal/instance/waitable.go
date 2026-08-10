@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wago-org/wago/src/component/internal/abi"
-	api "github.com/wago-org/wago/src/component/internal/engine"
+	"github.com/wago-org/component-model/internal/abi"
+	api "github.com/wago-org/component-model/internal/engine"
 )
 
 // This file transliterates the Canonical ABI's Waitable / WaitableSet /

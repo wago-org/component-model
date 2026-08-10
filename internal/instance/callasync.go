@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/wago-org/wago/src/component/internal/abi"
+	"github.com/wago-org/component-model/internal/abi"
 )
 
 // This file implements CallAsync -- a host-side non-blocking counterpart to

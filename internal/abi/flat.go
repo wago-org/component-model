@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/wago-org/wago/src/component/internal/binary"
+	"github.com/wago-org/component-model/internal/binary"
 )
 
 // LowerFlat converts a Value to a slice of CoreValues in the flat ABI.

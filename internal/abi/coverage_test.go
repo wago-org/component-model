@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wago-org/wago/src/component/internal/binary"
+	"github.com/wago-org/component-model/internal/binary"
 )
 
 // badRef is an empty TypeRef: neither a primitive name nor a type index. Any

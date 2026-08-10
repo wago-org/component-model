@@ -3,7 +3,7 @@ package binary
 import (
 	"fmt"
 
-	"github.com/wago-org/wago/src/component/internal/leb128"
+	"github.com/wago-org/component-model/internal/leb128"
 )
 
 // TypeDesc represents a full component type descriptor, capturing the complete

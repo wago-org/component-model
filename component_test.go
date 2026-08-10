@@ -6,9 +6,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/wago-org/component-model"
+	"github.com/wago-org/wago"
 	"github.com/wago-org/wago/plugin"
-	"github.com/wago-org/wago/src/component"
-	"github.com/wago-org/wago/src/wago"
 )
 
 // This fixture is a genuine Component Model binary, not a core Wasm module.

@@ -1,8 +1,8 @@
 package component
 
 import (
-	"github.com/wago-org/wago/src/component/internal/abi"
-	"github.com/wago-org/wago/src/component/internal/binary"
+	"github.com/wago-org/component-model/internal/abi"
+	"github.com/wago-org/component-model/internal/binary"
 )
 
 // This file is the WIT type vocabulary an embedder needs to declare a host

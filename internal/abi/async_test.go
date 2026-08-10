@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wago-org/wago/src/component/internal/binary"
+	"github.com/wago-org/component-model/internal/binary"
 )
 
 // Phase 0 ABI coverage for the async value types: stream, future, and

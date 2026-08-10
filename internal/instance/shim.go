@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"fmt"
 
-	api "github.com/wago-org/wago/src/component/internal/engine"
-	"github.com/wago-org/wago/src/component/internal/leb128"
+	api "github.com/wago-org/component-model/internal/engine"
+	"github.com/wago-org/component-model/internal/leb128"
 )
 
 // This file hand-encodes minimal core WebAssembly binaries for "passthrough

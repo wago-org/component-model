@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/wago-org/wago/src/component/internal/binary"
+	"github.com/wago-org/component-model/internal/binary"
 )
 
 // This file is the Go half of a differential oracle against the reference

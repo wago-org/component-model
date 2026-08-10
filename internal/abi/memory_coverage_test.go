@@ -3,7 +3,7 @@ package abi
 import (
 	"testing"
 
-	bintype "github.com/wago-org/wago/src/component/internal/binary"
+	bintype "github.com/wago-org/component-model/internal/binary"
 )
 
 // Coverage tests for all primitive types load/store and other edge cases

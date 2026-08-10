@@ -3,7 +3,7 @@ package component
 import (
 	"context"
 
-	"github.com/wago-org/wago/src/component/internal/instance"
+	"github.com/wago-org/component-model/internal/instance"
 )
 
 // This file is what a host implementation outside wazy registers through.

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/wago-org/wago/src/component/internal/leb128"
+	"github.com/wago-org/component-model/internal/leb128"
 )
 
 // rewriteEmptyImportModuleName returns a copy of moduleBytes (a real,

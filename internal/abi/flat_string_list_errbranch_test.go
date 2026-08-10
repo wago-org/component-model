@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wago-org/wago/src/component/internal/binary"
+	"github.com/wago-org/component-model/internal/binary"
 )
 
 // This file covers the error branches of the code that used to be stubbed

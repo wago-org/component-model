@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/wago-org/wago/src/component/internal/abi"
+	"github.com/wago-org/component-model/internal/abi"
 )
 
 // callbackCode is the reference's CallbackCode (definitions.py ~2205): the

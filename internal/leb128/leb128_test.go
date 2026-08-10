@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/wago-org/wago/src/component/internal/testrequire"
+	"github.com/wago-org/component-model/internal/testrequire"
 )
 
 func TestEncode_DecodeInt32(t *testing.T) {

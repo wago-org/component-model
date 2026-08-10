@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"testing"
 
-	bintype "github.com/wago-org/wago/src/component/internal/binary"
+	bintype "github.com/wago-org/component-model/internal/binary"
 )
 
 // goldenValuesEntry is the structure of one golden value entry.

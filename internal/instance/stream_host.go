@@ -3,8 +3,8 @@ package instance
 import (
 	"fmt"
 
-	"github.com/wago-org/wago/src/component/internal/abi"
-	"github.com/wago-org/wago/src/component/internal/binary"
+	"github.com/wago-org/component-model/internal/abi"
+	"github.com/wago-org/component-model/internal/binary"
 )
 
 // This file is the host-facing stream/future API

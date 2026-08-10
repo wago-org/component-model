@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wago-org/wago/src/component/internal/abi"
+	"github.com/wago-org/component-model/internal/abi"
 )
 
 // This file implements guestTask, the Phase 3 structural addition

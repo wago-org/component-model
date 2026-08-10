@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/wago-org/wago/src/component/internal/abi"
-	"github.com/wago-org/wago/src/component/internal/binary"
-	api "github.com/wago-org/wago/src/component/internal/engine"
+	"github.com/wago-org/component-model/internal/abi"
+	"github.com/wago-org/component-model/internal/binary"
+	api "github.com/wago-org/component-model/internal/engine"
 )
 
 // This file wires an async-lowered host import (canon lower's async option,

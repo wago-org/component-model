@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/wago-org/wago/src/component/internal/leb128"
+	"github.com/wago-org/component-model/internal/leb128"
 )
 
 // Component preamble constants (per WebAssembly/component-model spec).

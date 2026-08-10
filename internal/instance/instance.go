@@ -60,11 +60,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/wago-org/wago/src/component/internal/abi"
-	"github.com/wago-org/wago/src/component/internal/binary"
-	api "github.com/wago-org/wago/src/component/internal/engine"
-	wazy "github.com/wago-org/wago/src/component/internal/engine"
-	wasmruntime "github.com/wago-org/wago/src/component/internal/engine/wasmruntime"
+	"github.com/wago-org/component-model/internal/abi"
+	"github.com/wago-org/component-model/internal/binary"
+	api "github.com/wago-org/component-model/internal/engine"
+	wazy "github.com/wago-org/component-model/internal/engine"
+	wasmruntime "github.com/wago-org/component-model/internal/engine/wasmruntime"
 )
 
 // uint64SlicePool and coreValueSlicePool pool the []uint64/[]abi.CoreValue

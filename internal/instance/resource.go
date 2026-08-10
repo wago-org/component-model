@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	api "github.com/wago-org/wago/src/component/internal/engine"
+	api "github.com/wago-org/component-model/internal/engine"
 )
 
 // entryKind discriminates the kinds of values a handleTable can hold. Today

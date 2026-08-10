@@ -6,11 +6,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/wago-org/wago/src/component/internal/abi"
-	"github.com/wago-org/wago/src/component/internal/binary"
-	api "github.com/wago-org/wago/src/component/internal/engine"
-	wazy "github.com/wago-org/wago/src/component/internal/engine"
-	expctxkeys "github.com/wago-org/wago/src/component/internal/engine/expctxkeys"
+	"github.com/wago-org/component-model/internal/abi"
+	"github.com/wago-org/component-model/internal/binary"
+	api "github.com/wago-org/component-model/internal/engine"
+	wazy "github.com/wago-org/component-model/internal/engine"
+	expctxkeys "github.com/wago-org/component-model/internal/engine/expctxkeys"
 )
 
 // graphEmptyImportKey is the stable resolver key the graph rewrites a guest's

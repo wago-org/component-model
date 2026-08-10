@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/wago-org/wago/src/component/internal/engine/expctxkeys"
-	core "github.com/wago-org/wago/src/wago"
+	"github.com/wago-org/component-model/internal/engine/expctxkeys"
+	core "github.com/wago-org/wago"
 )
 
 type ValueType = byte

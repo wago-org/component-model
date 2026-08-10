@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/wago-org/wago/src/component/internal/abi"
-	"github.com/wago-org/wago/src/component/internal/binary"
-	api "github.com/wago-org/wago/src/component/internal/engine"
+	"github.com/wago-org/component-model/internal/abi"
+	"github.com/wago-org/component-model/internal/binary"
+	api "github.com/wago-org/component-model/internal/engine"
 )
 
 // This file wires the stream/future canon builtins (CanonKind 0x0e-0x1b) as

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wago-org/wago/src/component/internal/testfixtures"
+	"github.com/wago-org/component-model/internal/testfixtures"
 )
 
 // host_component.wasm is a real component assembled by wasm-tools from

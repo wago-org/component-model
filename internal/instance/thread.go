@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/wago-org/wago/src/component/internal/binary"
-	api "github.com/wago-org/wago/src/component/internal/engine"
+	"github.com/wago-org/component-model/internal/binary"
+	api "github.com/wago-org/component-model/internal/engine"
 )
 
 // reproAssertThreads gates the teardown invariant check below. It exists for

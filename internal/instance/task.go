@@ -3,7 +3,7 @@ package instance
 import (
 	"fmt"
 
-	"github.com/wago-org/wago/src/component/internal/abi"
+	"github.com/wago-org/component-model/internal/abi"
 )
 
 // taskState is the Canonical ABI's Task.State (testdata/definitions.py's

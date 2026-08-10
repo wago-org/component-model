@@ -38,9 +38,9 @@ package component
 import (
 	"context"
 
-	"github.com/wago-org/wago/src/component/internal/abi"
-	"github.com/wago-org/wago/src/component/internal/instance"
-	"github.com/wago-org/wago/src/wago"
+	"github.com/wago-org/component-model/internal/abi"
+	"github.com/wago-org/component-model/internal/instance"
+	"github.com/wago-org/wago"
 )
 
 // Instance is a live component instance. Call its exports with Call /

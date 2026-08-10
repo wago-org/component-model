@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/wago-org/component-model/internal/engine"
+	"github.com/wago-org/component-model/internal/instance"
+	"github.com/wago-org/wago"
 	"github.com/wago-org/wago/plugin"
-	"github.com/wago-org/wago/src/component/internal/engine"
-	"github.com/wago-org/wago/src/component/internal/instance"
-	"github.com/wago-org/wago/src/wago"
 )
 
 // PluginID is the stable extension ID for the Component Model runtime.
@@ -47,8 +47,8 @@ func (*Extension) Info() wago.ExtensionInfo {
 		Name:                 "WebAssembly Component Model",
 		Description:          "Decodes, links, and executes WebAssembly Components",
 		Stability:            wago.Experimental,
-		Repository:           "https://github.com/wago-org/wago",
-		License:              "BSD-3-Clause",
+		Repository:           "https://github.com/wago-org/component-model",
+		License:              "Apache-2.0",
 		Tags:                 []string{"component-model", "canonical-abi"},
 		RequiresCapabilities: []wago.PluginCapability{wago.PluginCoreEngine},
 	}

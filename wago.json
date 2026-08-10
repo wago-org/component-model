@@ -1,0 +1,14 @@
+{
+  "$schema": "https://wago.sh/v0/schema.json",
+  "module": "github.com/wago-org/component-model",
+  "name": "WebAssembly Component Model",
+  "version": "0.0.0",
+  "description": "Capability-gated WebAssembly Component Model runtime for Wago.",
+  "stability": "experimental",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/wago-org/component-model",
+  "repository": "https://github.com/wago-org/component-model",
+  "authors": ["The Wago authors"],
+  "keywords": ["webassembly", "component-model", "canonical-abi"],
+  "engines": {"wago": ">=0.1.0"}
+}

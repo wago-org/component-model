@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/wago-org/wago/src/component/internal/testrequire"
+	"github.com/wago-org/component-model/internal/testrequire"
 )
 
 // TestLeb128NoAlloc ensures no allocation required in the leb128 package.

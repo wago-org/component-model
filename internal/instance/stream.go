@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/wago-org/wago/src/component/internal/abi"
-	"github.com/wago-org/wago/src/component/internal/binary"
-	api "github.com/wago-org/wago/src/component/internal/engine"
+	"github.com/wago-org/component-model/internal/abi"
+	"github.com/wago-org/component-model/internal/binary"
+	api "github.com/wago-org/component-model/internal/engine"
 )
 
 // This file implements Phase 2's stream/future runtime: the shared rendezvous

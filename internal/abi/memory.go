@@ -7,7 +7,7 @@ import (
 	"math"
 	"unicode/utf8"
 
-	bintype "github.com/wago-org/wago/src/component/internal/binary"
+	bintype "github.com/wago-org/component-model/internal/binary"
 )
 
 // Realloc is the guest memory allocator used when lowering strings/lists into
