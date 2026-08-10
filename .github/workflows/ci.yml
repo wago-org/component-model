@@ -4,13 +4,18 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    name: Test
+    name: Test & coverage
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -23,5 +28,7 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
-      - name: Test with race detector
-        run: go test -race ./...
+      - name: Build
+        run: go build ./...
+      - name: Test with race detector and coverage
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
