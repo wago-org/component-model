@@ -364,7 +364,7 @@ func (th *guestThread) run() error {
 	th.in.threads.remove(th.index)
 	th.t.liveThreads--
 	if err != nil {
-		th.in.poisoned = true // guest code actually ran and trapped -- same rule as stackfulTask.run
+		th.in.poisoned.Store(true) // guest code actually ran and trapped -- same rule as stackfulTask.run
 		return fmt.Errorf("component/instance: thread %d: %w", th.index, err)
 	}
 	if th.t.liveThreads == 0 && th.t.state != taskResolved {

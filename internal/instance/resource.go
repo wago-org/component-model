@@ -130,6 +130,11 @@ type handleTable struct {
 	// the first drop); a HOST-provided resource's dtor is a Go callback (drop
 	// accounting). nil callback means drop just removes the entry.
 	dtors map[uint32]func(ctx context.Context, rep uint32) error
+	// hostDtors distinguishes callbacks safe and required to run during
+	// Instance.Close from guest destructors, which execute wasm and are not
+	// entered during teardown.
+	hostDtors map[uint32]bool
+	closed    bool
 
 	// names maps a resource type tag to the WIT name it was registered under
 	// (withResourceTag), used only to make this table's errors legible: a
@@ -209,6 +214,17 @@ func (t *handleTable) registerDtor(typeIdx uint32, dtor func(ctx context.Context
 		t.dtors = make(map[uint32]func(ctx context.Context, rep uint32) error)
 	}
 	t.dtors[typeIdx] = dtor
+	delete(t.hostDtors, typeIdx)
+}
+
+func (t *handleTable) registerHostDtor(typeIdx uint32, dtor func(ctx context.Context, rep uint32) error) {
+	t.registerDtor(typeIdx, dtor)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.hostDtors == nil {
+		t.hostDtors = make(map[uint32]bool)
+	}
+	t.hostDtors[typeIdx] = true
 }
 
 // dtorFor returns the destructor callback registered for a resource type tag,
@@ -221,12 +237,12 @@ func (t *handleTable) dtorFor(typeIdx uint32) func(ctx context.Context, rep uint
 
 // resourceDtor wraps a lazily-resolved guest destructor core func as a dtor
 // callback. resolve is called at drop time (its module is up by then); a nil
-// resolution means the dtor can't run, so the drop just removes the entry.
+// resolution is an error because a declared destructor may never be omitted.
 func resourceDtor(resolve func() api.Function) func(context.Context, uint32) error {
 	return func(ctx context.Context, rep uint32) error {
 		fn := resolve()
 		if fn == nil {
-			return nil
+			return fmt.Errorf("declared guest resource destructor is unavailable")
 		}
 		_, err := fn.Call(ctx, uint64(rep))
 		return err
@@ -253,6 +269,9 @@ func (t *handleTable) add(typeIdx, rep uint32, own bool) uint32 {
 func (t *handleTable) addEntry(e tableEntry) uint32 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.closed {
+		return 0
+	}
 	var h uint32
 	if n := len(t.free); n > 0 { // reuse a freed index (reference Table.free)
 		h = t.free[n-1]
@@ -263,6 +282,37 @@ func (t *handleTable) addEntry(e tableEntry) uint32 {
 	}
 	t.entries[h] = e
 	return h
+}
+
+// close drains the table atomically and invokes every live owned host
+// resource destructor exactly once. Guest destructors are deliberately not
+// run: they execute wasm after teardown has begun. The first callback error is
+// returned after all remaining callbacks have had a chance to clean up.
+func (t *handleTable) close(ctx context.Context) error {
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
+	entries := t.entries
+	t.entries = make(map[uint32]tableEntry)
+	t.free = nil
+	t.mu.Unlock()
+
+	var firstErr error
+	for _, raw := range entries {
+		e, ok := raw.(*resourceEntry)
+		if !ok || !e.own || !t.hostDtors[e.typeIdx] {
+			continue
+		}
+		if dtor := t.dtorFor(e.typeIdx); dtor != nil {
+			if err := dtor(ctx, e.rep); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
 }
 
 // entryAt returns the raw table entry at handle h, regardless of kind, or

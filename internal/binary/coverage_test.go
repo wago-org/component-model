@@ -307,18 +307,29 @@ func TestDumpWriteError(t *testing.T) {
 	}
 }
 
-// TestRawSectionRecordedForSkippedSection verifies that a genuinely unknown
-// section id is recorded in RawSections and skipped without decoding, via a
-// hand-crafted component with a single unknown section (id=200).
-func TestRawSectionRecordedForSkippedSection(t *testing.T) {
+// TestUnknownSectionRejected verifies that semantic sections are fail-closed.
+func TestUnknownSectionRejected(t *testing.T) {
 	buf := preamble()
 	buf = append(buf, 200, 0x02, 0xaa, 0xbb) // section id=200, size=2, body=[0xaa,0xbb]
-	c, err := Decode(bytes.NewReader(buf))
-	if err != nil {
-		t.Fatalf("Decode: %v", err)
+	if _, err := Decode(bytes.NewReader(buf)); !errors.Is(err, ErrInvalidSectionID) {
+		t.Fatalf("Decode error = %v, want ErrInvalidSectionID", err)
 	}
-	if len(c.RawSections) != 1 || c.RawSections[0].ID != 200 || c.RawSections[0].Size != 2 {
-		t.Errorf("RawSections: got %+v, want one {ID:200, Size:2}", c.RawSections)
+}
+
+func TestHugeVectorCountRejectedBeforeAllocation(t *testing.T) {
+	for _, sectionID := range []byte{2, 5, 6, 7, 8, 10, 11} {
+		buf := append(preamble(), sectionID, 0x05, 0xff, 0xff, 0xff, 0xff, 0x0f)
+		if _, err := Decode(bytes.NewReader(buf)); err == nil {
+			t.Fatalf("section %d: expected bounded-vector error", sectionID)
+		}
+	}
+}
+
+func TestDuplicateStartRejected(t *testing.T) {
+	// start payload: funcidx=0, vec(args)=0, result-count=0
+	buf := append(preamble(), 9, 3, 0, 0, 0, 9, 3, 0, 0, 0)
+	if _, err := Decode(bytes.NewReader(buf)); err == nil || !strings.Contains(err.Error(), "duplicate start") {
+		t.Fatalf("Decode error = %v, want duplicate start error", err)
 	}
 }
 
@@ -386,6 +397,17 @@ func TestCustomSectionTruncatedBody(t *testing.T) {
 	_, err := Decode(bytes.NewReader(buf))
 	if !errors.Is(err, ErrTruncatedBinary) {
 		t.Errorf("got err=%v, want ErrTruncatedBinary", err)
+	}
+}
+
+func TestCustomSectionAcceptedAndRecorded(t *testing.T) {
+	buf := append(preamble(), 0x00, 0x02, 0xaa, 0xbb)
+	c, err := Decode(bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.RawSections) != 1 || c.RawSections[0] != (RawSection{ID: 0, Size: 2}) {
+		t.Fatalf("RawSections = %#v", c.RawSections)
 	}
 }
 

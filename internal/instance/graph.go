@@ -298,7 +298,7 @@ func instantiateGraph(ctx context.Context, r wazy.Runtime, comp *binary.Componen
 	// Host-provided resources: the embedder's Go destructor runs when the guest
 	// drops an own<R> of a host resource.
 	for tag, fn := range cfg.hostResDtors {
-		resources.registerDtor(tag, fn)
+		resources.registerHostDtor(tag, fn)
 	}
 	// Give the table the WIT names behind the tags, so a handle error names
 	// the resource the guest asked for instead of an internal number.
@@ -472,7 +472,10 @@ func instantiateGraph(ctx context.Context, r wazy.Runtime, comp *binary.Componen
 	// matches the resource canon path: cfg.resCanon in a composition, else the
 	// raw definition index. This is what makes a guest's own resource.drop run
 	// its dtor (previously only host-initiated DropResource did).
-	instanceDtors := resolveDefinedResourceDtors(comp, coreFuncTarget)
+	instanceDtors, err := resolveDefinedResourceDtors(comp, coreFuncTarget)
+	if err != nil {
+		return fail(err)
+	}
 	for defIdx, resolve := range instanceDtors {
 		tag := defIdx
 		if cfg.resCanon != nil {
@@ -708,6 +711,24 @@ func instantiateGraph(ctx context.Context, r wazy.Runtime, comp *binary.Componen
 		}
 	}
 	cfg.pendingDelegates = nil
+
+	// All core modules are now instantiated, so every declared guest resource
+	// destructor must resolve and have the canonical (i32) -> () signature.
+	// Lazy registration above exists only for module ordering; it must never
+	// turn an invalid declaration into an omitted destructor.
+	for typeIdx, resolveDtor := range instanceDtors {
+		fn := resolveDtor()
+		if fn == nil {
+			closeSubs()
+			return fail(fmt.Errorf("component/instance: resource type %d declared destructor is unavailable", typeIdx))
+		}
+		def := fn.Definition()
+		params, results := def.ParamTypes(), def.ResultTypes()
+		if len(params) != 1 || params[0] != api.ValueTypeI32 || len(results) != 0 {
+			closeSubs()
+			return fail(fmt.Errorf("component/instance: resource type %d destructor must have core signature (i32) -> ()", typeIdx))
+		}
+	}
 
 	exports, err := bindImportExportsGraph(comp, componentFunc, coreFuncTarget, resolve, cfg.compileCache, compInstances)
 	if err != nil {
