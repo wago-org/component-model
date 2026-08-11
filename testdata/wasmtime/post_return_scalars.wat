@@ -1,0 +1,32 @@
+;; Adapted from Wasmtime tests/all/component_model/post_return.rs at
+;; 899e66bef961f63a795a371a19a1db019ef9e015.
+;; Licensed under Apache-2.0 WITH LLVM-exception.
+(component
+  (core module $m
+    (func (export "i32") (result i32) i32.const 1)
+    (func (export "i64") (result i64) i64.const 2)
+    (func (export "f32") (result f32) f32.const 3)
+    (func (export "f64") (result f64) f64.const 4)
+    (func (export "post-i32") (param i32)
+      local.get 0 i32.const 1 i32.ne if unreachable end)
+    (func (export "post-i64") (param i64)
+      local.get 0 i64.const 2 i64.ne if unreachable end)
+    (func (export "post-f32") (param f32)
+      local.get 0 f32.const 3 f32.ne if unreachable end)
+    (func (export "post-f64") (param f64)
+      local.get 0 f64.const 4 f64.ne if unreachable end)
+  )
+  (core instance $i (instantiate $m))
+  (alias core export $i "post-i32" (core func $post-i32))
+  (alias core export $i "post-i64" (core func $post-i64))
+  (alias core export $i "post-f32" (core func $post-f32))
+  (alias core export $i "post-f64" (core func $post-f64))
+  (func (export "i32") (result u32)
+    (canon lift (core func $i "i32") (post-return $post-i32)))
+  (func (export "i64") (result u64)
+    (canon lift (core func $i "i64") (post-return $post-i64)))
+  (func (export "f32") (result float32)
+    (canon lift (core func $i "f32") (post-return $post-f32)))
+  (func (export "f64") (result float64)
+    (canon lift (core func $i "f64") (post-return $post-f64)))
+)

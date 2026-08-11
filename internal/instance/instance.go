@@ -1873,7 +1873,7 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 	}
 	putCoreValueSlice(coreArgsPtr) // coreArgs' bits are now copied into stack; done with it
 
-	if err := be.coreFn.CallWithStack(ctx, stack); err != nil {
+	if err := callCoreWithStack(ctx, be.coreFn, stack); err != nil {
 		putUint64Slice(stackPtr)
 		in.poisoned.Store(true) // guest code actually ran and trapped -- see this func's doc
 		err = wrapUnreachableTrap(err)
@@ -1909,7 +1909,7 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 		}
 		// post-return takes the same flat results as params; CallWithStack lets
 		// it reuse rawResults' own buffer (the guest reads params, writes none).
-		if err := be.postReturnFn.CallWithStack(ctx, rawResults); err != nil {
+		if err := callCoreWithStack(ctx, be.postReturnFn, rawResults); err != nil {
 			putUint64Slice(stackPtr)
 			in.poisoned.Store(true) // guest code actually ran and trapped -- see this func's doc
 			return nil, fmt.Errorf("component/instance: export %q: post-return %q: %w", exportName, be.postReturnFuncName, err)
@@ -1918,6 +1918,34 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 
 	putUint64Slice(stackPtr)
 	return results, nil
+}
+
+// callCoreWithStack converts an error panic raised by a Component Model host
+// adapter into the trap error returned by the public component call. The core
+// engine already returns its own traps as errors, but deliberately re-panics
+// unknown host panic values. Canonical ABI adapters use error panics to abort a
+// guest call when lifting or lowering detects invalid guest-controlled memory.
+// Non-error panics remain programmer bugs and are not hidden.
+func callCoreWithStack(ctx context.Context, fn api.Function, stack []uint64) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if recoveredErr, ok := recovered.(error); ok {
+				err = recoveredErr
+				return
+			}
+			panic(recovered)
+		}
+	}()
+	// Some core engines use a zero-length stack as the sentinel for "nothing
+	// to execute" in their optimized path. A real () -> () function must still
+	// run: post-return functions commonly have that signature and may trap or
+	// perform mandatory cleanup. Use the ordinary entry point for this one
+	// shape so it cannot be skipped.
+	if len(stack) == 0 {
+		_, err = fn.Call(ctx)
+		return err
+	}
+	return fn.CallWithStack(ctx, stack)
 }
 
 // lowerParams lowers each component-level argument into its flattened core
