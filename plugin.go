@@ -33,7 +33,7 @@ func init() {
 
 // Extension installs Component Model execution into a Wago runtime. Use Enable
 // for programmatic installation, or register NewExtension in a manifest-driven
-// host with the runtime.core plugin capability granted.
+// host with the core.runtime plugin capability granted.
 type Extension struct {
 	runtime *Runtime
 }
@@ -50,12 +50,12 @@ func (*Extension) Info() wago.ExtensionInfo {
 		Repository:           "https://github.com/wago-org/component-model",
 		License:              "Apache-2.0",
 		Tags:                 []string{"component-model", "canonical-abi"},
-		RequiresCapabilities: []wago.PluginCapability{wago.PluginCoreEngine},
+		RequiresCapabilities: []wago.PluginCapability{wago.PluginCoreRuntime},
 	}
 }
 
 func (e *Extension) Register(reg *wago.Registry) error {
-	access, err := reg.CoreEngine()
+	access, err := reg.CoreRuntime()
 	if err != nil {
 		return err
 	}
@@ -66,7 +66,7 @@ func (e *Extension) Register(reg *wago.Registry) error {
 // Runtime is the capability-scoped Component Model execution service installed
 // in one Wago runtime. It cannot be moved to or used with another runtime.
 type Runtime struct {
-	engine wago.CoreEngine
+	engine wago.CoreRuntime
 }
 
 // Enable installs the Component Model plugin with its required authority and
@@ -75,7 +75,7 @@ func Enable(rt *wago.Runtime) (*Runtime, error) {
 	if rt == nil {
 		return nil, fmt.Errorf("component: enable on nil Wago runtime")
 	}
-	if err := rt.UsePlugin(PluginID, wago.WithPluginGrants(wago.PluginCoreEngine)); err != nil {
+	if err := rt.UsePlugin(PluginID, wago.WithPluginGrants(wago.PluginCoreRuntime)); err != nil {
 		return nil, err
 	}
 	return FromRuntime(rt)

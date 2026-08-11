@@ -86,7 +86,7 @@ Select the plugin in your project's `wago.json`:
 }
 ```
 
-Component execution requires one privileged plugin capability: `runtime.core`. Record
+Component execution requires one privileged plugin capability: `core.runtime`. Record
 the reviewed authority and exact version in `wago-lock.json`:
 
 ```json
@@ -94,9 +94,9 @@ the reviewed authority and exact version in `wago-lock.json`:
   "plugins": {
     "wago-org/component-model": {
       "version": "0.0.0",
-      "requiredCapabilities": ["runtime.core"],
+      "requiredCapabilities": ["core.runtime"],
       "capabilities": {
-        "runtime.core": true
+        "core.runtime": true
       }
     }
   }
@@ -210,7 +210,7 @@ Canonical ABI signature is still checked structurally.
 ### Depending on the runtime service
 
 Plugins that provide component worlds should require `RuntimeService`; they should not
-request `runtime.core` themselves:
+request `core.runtime` themselves:
 
 ```go
 type Extension struct {
@@ -300,7 +300,7 @@ closed after every instance using it has closed.
 
 ## Security
 
-- **Narrow authority**: `runtime.core` exposes only compilation, instantiation, and host
+- **Narrow authority**: `core.runtime` exposes only compilation, instantiation, and host
   function references. It does not expose `*wago.Runtime`, extension registration,
   policy, hooks, or arbitrary lifecycle control.
 - **Revocable access**: the core-engine handle is inactive before transactional commit
@@ -375,7 +375,7 @@ Contributions are welcome! Please:
   behavior.
 - Keep world policy out of this repository; WASI and application-specific interfaces
   belong in plugins that consume `RuntimeService`.
-- Do not widen `runtime.core` or bypass the typed service boundary for convenience.
+- Do not widen `core.runtime` or bypass the typed service boundary for convenience.
 - Follow standard Go formatting (`gofmt`) and conventional commit messages.
 
 ## License

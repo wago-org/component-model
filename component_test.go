@@ -91,7 +91,7 @@ func TestPluginFailsClosedWithoutCapabilityOrInstallation(t *testing.T) {
 		t.Fatal("Instantiate without the component plugin succeeded")
 	}
 	if err := r.Use(component.NewExtension(), wago.WithPluginGrants()); !errors.Is(err, wago.ErrPermissionDenied) {
-		t.Fatalf("Use without runtime.core grant = %v, want permission denied", err)
+		t.Fatalf("Use without core.runtime grant = %v, want permission denied", err)
 	}
 }
 
