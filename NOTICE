@@ -4,3 +4,10 @@ cd2607360a17a63bd83a6c99e33c4545f467b57e.
 
 Copyright 2026 the Wazy authors.
 Licensed under the Apache License, Version 2.0. See the repository root LICENSE.
+
+Selected Component Model conformance fixtures and test scenarios are adapted
+from github.com/bytecodealliance/wasmtime at commit
+899e66bef961f63a795a371a19a1db019ef9e015.
+
+Copyright the Wasmtime authors.
+Licensed under Apache-2.0 WITH LLVM-exception.

@@ -1149,6 +1149,16 @@ func Instantiate(ctx context.Context, r wazy.Runtime, componentBytes []byte, opt
 // table (not just funcs), and a core func index space where canon-produced
 // funcs (lower, resource.*) and core-level func aliases interleave.
 func needsGraphPath(comp *binary.Component) bool {
+	// The trivial path intentionally binds only the lifted core function and
+	// does not resolve canonical options. Routing a lift with post-return (or
+	// any other option carrying runtime behavior) through it would silently
+	// discard that behavior. The graph path resolves and validates the full
+	// option set.
+	for _, canon := range comp.Canons {
+		if len(canon.Opts) != 0 {
+			return true
+		}
+	}
 	for _, ci := range comp.CoreInstances {
 		if ci.Kind != 0x01 {
 			continue
@@ -1725,7 +1735,7 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 	}
 	putCoreValueSlice(coreArgsPtr) // coreArgs' bits are now copied into stack; done with it
 
-	if err := be.coreFn.CallWithStack(ctx, stack); err != nil {
+	if err := callCoreWithStack(ctx, be.coreFn, stack); err != nil {
 		putUint64Slice(stackPtr)
 		in.poisoned = true // guest code actually ran and trapped -- see this func's doc
 		err = wrapUnreachableTrap(err)
@@ -1757,7 +1767,7 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 		}
 		// post-return takes the same flat results as params; CallWithStack lets
 		// it reuse rawResults' own buffer (the guest reads params, writes none).
-		if err := be.postReturnFn.CallWithStack(ctx, rawResults); err != nil {
+		if err := callCoreWithStack(ctx, be.postReturnFn, rawResults); err != nil {
 			putUint64Slice(stackPtr)
 			in.poisoned = true // guest code actually ran and trapped -- see this func's doc
 			return nil, fmt.Errorf("component/instance: export %q: post-return %q: %w", exportName, be.postReturnFuncName, err)
@@ -1766,6 +1776,34 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 
 	putUint64Slice(stackPtr)
 	return results, nil
+}
+
+// callCoreWithStack converts an error panic raised by a Component Model host
+// adapter into the trap error returned by the public component call. The core
+// engine already returns its own traps as errors, but deliberately re-panics
+// unknown host panic values. Canonical ABI adapters use error panics to abort a
+// guest call when lifting or lowering detects invalid guest-controlled memory.
+// Non-error panics remain programmer bugs and are not hidden.
+func callCoreWithStack(ctx context.Context, fn api.Function, stack []uint64) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if recoveredErr, ok := recovered.(error); ok {
+				err = recoveredErr
+				return
+			}
+			panic(recovered)
+		}
+	}()
+	// Some core engines use a zero-length stack as the sentinel for "nothing
+	// to execute" in their optimized path. A real () -> () function must still
+	// run: post-return functions commonly have that signature and may trap or
+	// perform mandatory cleanup. Use the ordinary entry point for this one
+	// shape so it cannot be skipped.
+	if len(stack) == 0 {
+		_, err = fn.Call(ctx)
+		return err
+	}
+	return fn.CallWithStack(ctx, stack)
 }
 
 // lowerParams lowers each component-level argument into its flattened core
@@ -2002,6 +2040,9 @@ func (in *Instance) DropResource(ctx context.Context, iface, resourceName string
 	dtorName := iface + "#[dtor]" + resourceName
 	for _, mod := range in.closers {
 		if fn := safeExportedFunction(mod, dtorName); fn != nil {
+			if api.IsHostFunction(fn) {
+				continue
+			}
 			if _, err := fn.Call(ctx, uint64(rep)); err != nil {
 				return fmt.Errorf("component/instance: DropResource %s/%s: destructor: %w", iface, resourceName, err)
 			}

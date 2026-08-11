@@ -63,6 +63,14 @@ type Function interface {
 	CallWithStack(context.Context, []uint64) error
 }
 
+// IsHostFunction reports whether fn is a synthetic function implemented by
+// the host. Such functions can only be entered through a core wasm import and
+// must not be called directly by component lifecycle code.
+func IsHostFunction(fn Function) bool {
+	_, ok := fn.(*hostFunction)
+	return ok
+}
+
 type Memory interface {
 	Size() uint32
 	Read(uint32, uint32) ([]byte, bool)
