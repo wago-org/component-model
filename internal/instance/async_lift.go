@@ -83,7 +83,7 @@ func (in *Instance) invokeAsyncCallback(ctx context.Context, be *boundExport, ex
 	// Instance): once any earlier call's guestTask/stackfulTask.fail has run,
 	// every later entry is refused permanently, matching the reference's
 	// Store poisoning invariant.
-	if in.poisoned || !in.mayEnter {
+	if in.poisoned.Load() || !in.mayEnter {
 		return nil, fmt.Errorf("component/instance: export %q: cannot enter component instance", exportName)
 	}
 
@@ -146,7 +146,7 @@ func (in *Instance) invokeStackful(ctx context.Context, be *boundExport, exportN
 	if be.flattenErr != nil {
 		return nil, fmt.Errorf("component/instance: export %q: flatten func type: %w", exportName, be.flattenErr)
 	}
-	if in.poisoned || !in.mayEnter { // Store.lift's prologue: trap_if(!may_enter_from)
+	if in.poisoned.Load() || !in.mayEnter { // Store.lift's prologue: trap_if(!may_enter_from)
 		return nil, fmt.Errorf("component/instance: export %q: cannot enter component instance", exportName)
 	}
 
@@ -211,7 +211,7 @@ func (in *Instance) startAsyncExportTask(ctx context.Context, be *boundExport, e
 	// running, so by construction it cannot also be running on THIS
 	// instance unless this instance IS the caller re-entering itself --
 	// exactly the case mayEnter guards), kept as a real trap for parity.
-	if in.poisoned || !in.mayEnter {
+	if in.poisoned.Load() || !in.mayEnter {
 		return nil, fmt.Errorf("component/instance: export %q: cannot enter component instance", exportName)
 	}
 	fr := &callbackFrame{}
@@ -260,7 +260,7 @@ func (in *Instance) startAsyncExportTask(ctx context.Context, be *boundExport, e
 func (in *Instance) startStackfulExportTask(ctx context.Context, be *boundExport, exportName string,
 	onStart func(*task) ([]abi.Value, error), onResolve func([]abi.Value, bool) error,
 ) (calleeTask *task, err error) {
-	if in.poisoned || !in.mayEnter {
+	if in.poisoned.Load() || !in.mayEnter {
 		return nil, fmt.Errorf("component/instance: export %q: cannot enter component instance", exportName)
 	}
 	t := &task{inst: in, be: be}

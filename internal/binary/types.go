@@ -71,11 +71,12 @@ func readLabel(buf []byte, off int) (string, int, error) {
 		return "", off, fmt.Errorf("label length: %w", err)
 	}
 	off += int(n)
-	if off+int(length) > len(buf) {
+	if uint64(length) > uint64(len(buf)-off) {
 		return "", off, ErrTruncatedBinary
 	}
-	s := string(buf[off : off+int(length)])
-	return s, off + int(length), nil
+	end := off + int(length)
+	s := string(buf[off:end])
+	return s, end, nil
 }
 
 // readExternName consumes an import/export name: a 0x00/0x01 kind byte, a
@@ -235,11 +236,11 @@ func readComponentDecl(buf []byte, off int) (int, error) {
 
 // readComponenttype consumes vec(componentdecl) (the 0x41 tag already read).
 func readComponenttype(buf []byte, off int) (int, error) {
-	count, n, err := leb128.LoadUint32(buf[off:])
+	count, next, err := readBoundedVecCount(buf, off, 1)
 	if err != nil {
 		return off, err
 	}
-	off += int(n)
+	off = next
 	for i := range count {
 		if off, err = readComponentDecl(buf, off); err != nil {
 			return off, fmt.Errorf("componentdecl[%d]: %w", i, err)

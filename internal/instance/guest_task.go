@@ -307,7 +307,7 @@ func (gt *guestTask) firstRunBody() error {
 	if err := be.coreFn.CallWithStack(gt.ctx, stack); err != nil {
 		putUint64Slice(stackPtr)
 		gt.in.leaveRun()
-		gt.in.poisoned = true // guest code actually ran and trapped -- see fail's doc
+		gt.in.poisoned.Store(true) // guest code actually ran and trapped -- see fail's doc
 		return gt.fail(fmt.Errorf("component/instance: export %q: call core func %q: %w", gt.exportName, be.funcName, err))
 	}
 	packed := uint32(stack[0])
@@ -400,7 +400,7 @@ func (gt *guestTask) runLoopBody(ev eventTuple) error {
 	if err := gt.be.callbackFn.CallWithStack(gt.ctx, cbStack); err != nil {
 		putUint64Slice(cbStackPtr)
 		gt.in.leaveRun()
-		gt.in.poisoned = true // guest code actually ran and trapped -- see fail's doc
+		gt.in.poisoned.Store(true) // guest code actually ran and trapped -- see fail's doc
 		return gt.fail(fmt.Errorf("component/instance: export %q: callback %q: %w", gt.exportName, gt.be.callbackFuncName, err))
 	}
 	packed := uint32(cbStack[0])

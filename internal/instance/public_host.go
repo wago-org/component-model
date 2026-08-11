@@ -63,11 +63,9 @@ func WithHostResourceDtor(tag uint32, fn func(ctx context.Context, rep uint32) e
 	return withHostResourceDtor(tag, fn)
 }
 
-// WithHostState attaches an opaque value to every Instance built with this
-// option, retrievable via Instance.HostState(key). It is how a host
-// implementation of a stateful interface keeps per-instance state: the value
-// is created once per Instantiate call and lives exactly as long as the
-// Instance.
+// WithHostState attaches an opaque, intentionally shared value to every
+// Instance built with this option. Use WithHostStateFactory for mutable state
+// that must be isolated per instantiation.
 //
 // key should be a package-private type, not a bare string, so two independent
 // host implementations cannot collide.
@@ -77,6 +75,28 @@ func WithHostState(key, value any) Option {
 			c.hostState = map[any]any{}
 		}
 		c.hostState[key] = value
+	}
+}
+
+// WithHostStateFactory creates and attaches a fresh opaque value each time the
+// option is applied by Instantiate or NewHarness.
+func WithHostStateFactory(key any, newState func() any) Option {
+	return func(c *config) {
+		if c.hostState == nil {
+			c.hostState = map[any]any{}
+		}
+		c.hostState[key] = newState()
+	}
+}
+
+// WithOptionsFactory builds a coherent fresh bundle of options per
+// instantiation. Stateful hosts can ensure imports, resource hooks,
+// destructors, and HostState all close over the same new object.
+func WithOptionsFactory(newOptions func() []Option) Option {
+	return func(c *config) {
+		for _, opt := range newOptions() {
+			opt(c)
+		}
 	}
 }
 

@@ -56,20 +56,29 @@ func WithHostResourceDtor(tag uint32, fn func(ctx context.Context, rep uint32) e
 	return instance.WithHostResourceDtor(tag, fn)
 }
 
-// WithHostState attaches an opaque value to every Instance built with this
-// option, retrievable with Instance.HostState. It is how a host
-// implementation of a stateful interface keeps state that lives exactly as
-// long as one Instance -- the shape wazy's own wasi:http server side uses to
-// find its request/response tables from ServeHTTP.
+// WithHostState attaches an opaque, intentionally shared value to every
+// Instance built with this option. Use WithHostStateFactory for mutable state
+// that must be isolated per instantiation.
 //
 // Use a package-private key type, not a bare string, so two independent host
 // implementations cannot collide:
 //
 //	type myHostKey struct{}
-//	component.WithHostState(myHostKey{}, newMyHost())
+//	component.WithHostStateFactory(myHostKey{}, func() any { return newMyHost() })
 //	h := inst.HostState(myHostKey{}).(*myHost)
 func WithHostState(key, value any) Option {
 	return instance.WithHostState(key, value)
+}
+
+// WithHostStateFactory creates a fresh value for each instantiation.
+func WithHostStateFactory(key any, newState func() any) Option {
+	return instance.WithHostStateFactory(key, newState)
+}
+
+// WithOptionsFactory creates a fresh, coherent option bundle for each
+// instantiation.
+func WithOptionsFactory(newOptions func() []Option) Option {
+	return instance.WithOptionsFactory(newOptions)
 }
 
 // InstanceExports is re-exported on Instance itself; see

@@ -86,8 +86,8 @@ type Component struct {
 	// Start is the optional start section that specifies startup behavior (section 9).
 	Start *Start
 
-	// RawSections tracks sections we parse the header for but skip the body.
-	// Used for sections we don't fully decode yet (e.g., core-type, component decls).
+	// RawSections tracks custom sections whose headers are parsed but whose
+	// payloads are intentionally skipped. Semantic sections are never skipped.
 	RawSections []RawSection
 
 	// Bytes is the complete binary this component was decoded from (the whole

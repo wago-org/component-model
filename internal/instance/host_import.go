@@ -45,8 +45,8 @@ type config struct {
 	// preserves the exact prior always-recompile behavior.
 	compileCache *CompileCache
 
-	// hostState carries opaque per-instance values a host implementation
-	// registered with WithHostState, handed to the Instance at
+	// hostState carries opaque values a host implementation registered with
+	// WithHostState or WithHostStateFactory, handed to the Instance at
 	// instantiation. It exists because a host that implements a stateful
 	// interface (wasi:http's server side is the in-tree example) needs
 	// somewhere to hang state that lives exactly as long as one Instance,

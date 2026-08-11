@@ -251,11 +251,11 @@ func readLabelValtypeVecDesc(buf []byte, off int) ([]struct {
 	Type TypeRef
 }, int, error,
 ) {
-	count, n, err := leb128.LoadUint32(buf[off:])
+	count, next, err := readBoundedVecCount(buf, off, 1)
 	if err != nil {
 		return nil, off, err
 	}
-	off += int(n)
+	off = next
 	result := make([]struct {
 		Name string
 		Type TypeRef
@@ -278,11 +278,11 @@ func readLabelValtypeVecDesc(buf []byte, off int) ([]struct {
 
 // readLabelVecDesc reads a vec(label) and returns the slice of names.
 func readLabelVecDesc(buf []byte, off int) ([]string, int, error) {
-	count, n, err := leb128.LoadUint32(buf[off:])
+	count, next, err := readBoundedVecCount(buf, off, 1)
 	if err != nil {
 		return nil, off, err
 	}
-	off += int(n)
+	off = next
 	result := make([]string, count)
 	for i := range count {
 		name, newOff, err := readLabel(buf, off)
@@ -297,11 +297,11 @@ func readLabelVecDesc(buf []byte, off int) ([]string, int, error) {
 
 // readValtypeVecDesc reads a vec(valtype) and returns the slice of TypeRefs.
 func readValtypeVecDesc(buf []byte, off int) ([]TypeRef, int, error) {
-	count, n, err := leb128.LoadUint32(buf[off:])
+	count, next, err := readBoundedVecCount(buf, off, 1)
 	if err != nil {
 		return nil, off, err
 	}
-	off += int(n)
+	off = next
 	result := make([]TypeRef, count)
 	for i := range count {
 		ref, newOff, err := readValTypeRef(buf, off)
@@ -364,11 +364,11 @@ func readVariantCaseDesc(buf []byte, off int) (VariantCase, int, error) {
 
 // readVariantDesc reads a variant type: vec(case).
 func readVariantDesc(buf []byte, off int) (VariantDesc, int, error) {
-	count, n, err := leb128.LoadUint32(buf[off:])
+	count, next, err := readBoundedVecCount(buf, off, 1)
 	if err != nil {
 		return VariantDesc{}, off, err
 	}
-	off += int(n)
+	off = next
 	cases := make([]VariantCase, count)
 	for i := range count {
 		c, newOff, err := readVariantCaseDesc(buf, off)
@@ -610,11 +610,11 @@ func readCoretypeDef(buf []byte, off int) (int, error) {
 		}
 		return readCoreValtypeVec(buf, off)
 	case 0x50: // core:moduletype = vec(core:moduledecl)
-		count, n, err := leb128.LoadUint32(buf[off:])
+		count, next, err := readBoundedVecCount(buf, off, 1)
 		if err != nil {
 			return off, err
 		}
-		off += int(n)
+		off = next
 		for i := uint32(0); i < count; i++ {
 			if off, err = readCoreModuleDecl(buf, off); err != nil {
 				return off, fmt.Errorf("coremoduledecl[%d]: %w", i, err)
@@ -630,11 +630,11 @@ func readCoretypeDef(buf []byte, off int) (int, error) {
 // byte (0x7f i32 … 0x7b v128, plus reference-type bytes), so the whole vector
 // is count single bytes.
 func readCoreValtypeVec(buf []byte, off int) (int, error) {
-	count, n, err := leb128.LoadUint32(buf[off:])
+	count, next, err := readBoundedVecCount(buf, off, 1)
 	if err != nil {
 		return off, err
 	}
-	off += int(n)
+	off = next
 	if off+int(count) > len(buf) {
 		return off, ErrTruncatedBinary
 	}
@@ -733,7 +733,7 @@ func skipName(buf []byte, off int) (int, error) {
 		return off, err
 	}
 	off += int(m)
-	if off+int(n) > len(buf) {
+	if uint64(n) > uint64(len(buf)-off) {
 		return off, ErrTruncatedBinary
 	}
 	return off + int(n), nil
@@ -742,11 +742,11 @@ func skipName(buf []byte, off int) (int, error) {
 // readInstancetypeDesc reads an instance type: vec(instancedecl).
 // For M1, we consume the bytes but do not fully represent all nested structures.
 func readInstancetypeDesc(buf []byte, off int) (InstanceDesc, int, error) {
-	count, n, err := leb128.LoadUint32(buf[off:])
+	count, next, err := readBoundedVecCount(buf, off, 1)
 	if err != nil {
 		return InstanceDesc{}, off, err
 	}
-	off += int(n)
+	off = next
 	// For M1, we skip building a full descriptor for instance contents.
 	// Just consume the bytes to stay synchronized.
 	for i := range count {

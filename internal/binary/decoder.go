@@ -26,6 +26,7 @@ var (
 	ErrInvalidVersion     = errors.New("invalid version header")
 	ErrInvalidLayer       = errors.New("invalid layer header (expected component layer 0x01 0x00)")
 	ErrInvalidSectionID   = errors.New("invalid section id")
+	ErrUnsupportedSection = errors.New("unsupported component section")
 	ErrTruncatedBinary    = errors.New("truncated binary")
 )
 
@@ -42,6 +43,30 @@ func Decode(r io.Reader) (*Component, error) {
 	}
 
 	return decodeComponent(buf)
+}
+
+const maxVectorElements = 1 << 20
+
+// readBoundedVecCount decodes a vector length without trusting it as an
+// allocation size. Every currently decoded vector element consumes at least
+// one byte, so a count larger than the section-local bytes remaining cannot
+// possibly be valid.
+func readBoundedVecCount(buf []byte, off int, minElementBytes uint64) (uint32, int, error) {
+	if off < 0 || off > len(buf) {
+		return 0, off, ErrTruncatedBinary
+	}
+	count, n, err := leb128.LoadUint32(buf[off:])
+	if err != nil {
+		return 0, off, err
+	}
+	after := off + int(n)
+	if count > maxVectorElements {
+		return 0, after, fmt.Errorf("vector count %d exceeds implementation limit %d", count, maxVectorElements)
+	}
+	if after > len(buf) || uint64(count)*minElementBytes > uint64(len(buf)-after) {
+		return 0, after, fmt.Errorf("vector count %d exceeds remaining payload of %d byte(s)", count, len(buf)-after)
+	}
+	return count, after, nil
 }
 
 func decodeComponent(buf []byte) (*Component, error) {
@@ -83,6 +108,15 @@ func decodeComponent(buf []byte) (*Component, error) {
 		offset += int(n)
 
 		sectionStart := offset
+		// Every section decoder must see only its declared payload. Besides
+		// producing better truncation errors, this prevents a malformed vector
+		// count from borrowing bytes from the following section to justify an
+		// allocation.
+		if uint64(sectionSize) > uint64(len(buf)-offset) {
+			return nil, fmt.Errorf("section %s: %w", sectionIDName(sectionID), ErrTruncatedBinary)
+		}
+		sectionEnd := offset + int(sectionSize)
+		sectionBuf := buf[:sectionEnd]
 
 		// Dispatch on section ID.
 		switch sectionID {
@@ -93,13 +127,11 @@ func decodeComponent(buf []byte) (*Component, error) {
 			// component (the section-size mismatch check below can't catch
 			// this case, since it compares bytesRead against sectionSize,
 			// and here bytesRead is unconditionally set equal to sectionSize).
-			if sectionSize > uint32(len(buf)-offset) {
-				return nil, fmt.Errorf("section %s: %w", sectionIDName(sectionID), ErrTruncatedBinary)
-			}
+			c.RawSections = append(c.RawSections, RawSection{ID: sectionID, Size: sectionSize})
 			offset += int(sectionSize)
 
 		case 1: // Core Module section
-			newOffset, err := decodeCoreModuleSection(buf, offset, sectionStart, sectionSize)
+			newOffset, err := decodeCoreModuleSection(sectionBuf, offset, sectionStart, sectionSize)
 			if err != nil {
 				return nil, fmt.Errorf("core module section: %w", err)
 			}
@@ -111,24 +143,17 @@ func decodeComponent(buf []byte) (*Component, error) {
 			})
 
 		case 2: // Core Instance section
-			coreInstances, newOffset, err := decodeCoreInstanceSection(buf, offset, sectionSize)
+			coreInstances, newOffset, err := decodeCoreInstanceSection(sectionBuf, offset, sectionSize)
 			if err != nil {
 				return nil, fmt.Errorf("core instance section: %w", err)
 			}
 			offset = newOffset
 			c.CoreInstances = append(c.CoreInstances, coreInstances...)
 
-		case 3: // Core Type section (not yet fully decoded)
-			if sectionSize > uint32(len(buf)-offset) {
-				return nil, fmt.Errorf("section %s: %w", sectionIDName(sectionID), ErrTruncatedBinary)
-			}
-			c.RawSections = append(c.RawSections, RawSection{ID: sectionID, Size: sectionSize})
-			offset += int(sectionSize)
+		case 3: // Core Type section (not yet implemented)
+			return nil, fmt.Errorf("section %s: %w", sectionIDName(sectionID), ErrUnsupportedSection)
 
 		case 4: // Component section: a fully embedded nested component.
-			if sectionSize > uint32(len(buf)-offset) {
-				return nil, fmt.Errorf("section %s: %w", sectionIDName(sectionID), ErrTruncatedBinary)
-			}
 			// Per Binary.md, section_4(<component>) carries a *complete*
 			// component binary (preamble included), so it recurses through
 			// decodeComponent unchanged rather than through Decode (which
@@ -141,7 +166,7 @@ func decodeComponent(buf []byte) (*Component, error) {
 			offset += int(sectionSize)
 
 		case 5: // Instance section
-			instances, newOffset, err := decodeInstanceSection(buf, offset, sectionSize)
+			instances, newOffset, err := decodeInstanceSection(sectionBuf, offset, sectionSize)
 			if err != nil {
 				return nil, fmt.Errorf("instance section: %w", err)
 			}
@@ -157,7 +182,7 @@ func decodeComponent(buf []byte) (*Component, error) {
 			}
 
 		case 6: // Alias section
-			aliases, newOffset, err := decodeAliasSection(buf, offset, sectionSize)
+			aliases, newOffset, err := decodeAliasSection(sectionBuf, offset, sectionSize)
 			if err != nil {
 				return nil, fmt.Errorf("alias section: %w", err)
 			}
@@ -193,7 +218,7 @@ func decodeComponent(buf []byte) (*Component, error) {
 			}
 
 		case 7: // Type section
-			types, newOffset, err := decodeTypeSection(buf, offset, sectionSize)
+			types, newOffset, err := decodeTypeSection(sectionBuf, offset, sectionSize)
 			if err != nil {
 				return nil, fmt.Errorf("type section: %w", err)
 			}
@@ -208,7 +233,7 @@ func decodeComponent(buf []byte) (*Component, error) {
 			c.Types = append(c.Types, types...)
 
 		case 8: // Canonical section
-			canons, newOffset, err := decodeCanonSection(buf, offset, sectionSize)
+			canons, newOffset, err := decodeCanonSection(sectionBuf, offset, sectionSize)
 			if err != nil {
 				return nil, fmt.Errorf("canon section: %w", err)
 			}
@@ -231,7 +256,10 @@ func decodeComponent(buf []byte) (*Component, error) {
 			}
 
 		case 9: // Start section
-			start, newOffset, err := decodeStartSection(buf, offset, sectionSize)
+			if c.Start != nil {
+				return nil, fmt.Errorf("start section: duplicate start section")
+			}
+			start, newOffset, err := decodeStartSection(sectionBuf, offset, sectionSize)
 			if err != nil {
 				return nil, fmt.Errorf("start section: %w", err)
 			}
@@ -239,7 +267,7 @@ func decodeComponent(buf []byte) (*Component, error) {
 			c.Start = start
 
 		case 10: // Import section
-			imports, newOffset, err := decodeImportSection(buf, offset, sectionSize)
+			imports, newOffset, err := decodeImportSection(sectionBuf, offset, sectionSize)
 			if err != nil {
 				return nil, fmt.Errorf("import section: %w", err)
 			}
@@ -269,7 +297,7 @@ func decodeComponent(buf []byte) (*Component, error) {
 			}
 
 		case 11: // Export section
-			exports, newOffset, err := decodeExportSection(buf, offset, sectionSize)
+			exports, newOffset, err := decodeExportSection(sectionBuf, offset, sectionSize)
 			if err != nil {
 				return nil, fmt.Errorf("export section: %w", err)
 			}
@@ -292,14 +320,11 @@ func decodeComponent(buf []byte) (*Component, error) {
 				}
 			}
 
+		case 12: // Value section is a post-0.2 gated feature.
+			return nil, fmt.Errorf("section %s: %w", sectionIDName(sectionID), ErrUnsupportedSection)
+
 		default:
-			// Record and skip unknown/unimplemented sections. Same
-			// truncation bounds-check as the custom-section case above.
-			if sectionSize > uint32(len(buf)-offset) {
-				return nil, fmt.Errorf("section %s: %w", sectionIDName(sectionID), ErrTruncatedBinary)
-			}
-			c.RawSections = append(c.RawSections, RawSection{ID: sectionID, Size: sectionSize})
-			offset += int(sectionSize)
+			return nil, fmt.Errorf("section id %#x: %w", sectionID, ErrInvalidSectionID)
 		}
 
 		// Verify we consumed exactly the right number of bytes.
@@ -320,11 +345,11 @@ func decodeComponent(buf []byte) (*Component, error) {
 func decodeTypeSection(buf []byte, offset int, sectionSize uint32) ([]Type, int, error) {
 	sectionStart := offset
 
-	count, n, err := leb128.LoadUint32(buf[offset:])
+	count, next, err := readBoundedVecCount(buf, offset, 1)
 	if err != nil {
 		return nil, offset, fmt.Errorf("read count: %w", err)
 	}
-	offset += int(n)
+	offset = next
 
 	types := make([]Type, count)
 	for i := range count {
@@ -349,11 +374,11 @@ func decodeTypeSection(buf []byte, offset int, sectionSize uint32) ([]Type, int,
 func decodeImportSection(buf []byte, offset int, sectionSize uint32) ([]Import, int, error) {
 	sectionStart := offset
 
-	count, n, err := leb128.LoadUint32(buf[offset:])
+	count, next, err := readBoundedVecCount(buf, offset, 1)
 	if err != nil {
 		return nil, offset, fmt.Errorf("read count: %w", err)
 	}
-	offset += int(n)
+	offset = next
 
 	imports := make([]Import, count)
 	for i := range count {
@@ -389,11 +414,11 @@ func decodeImportSection(buf []byte, offset int, sectionSize uint32) ([]Import, 
 func decodeExportSection(buf []byte, offset int, sectionSize uint32) ([]Export, int, error) {
 	sectionStart := offset
 
-	count, n, err := leb128.LoadUint32(buf[offset:])
+	count, next, err := readBoundedVecCount(buf, offset, 1)
 	if err != nil {
 		return nil, offset, fmt.Errorf("read count: %w", err)
 	}
-	offset += int(n)
+	offset = next
 
 	exports := make([]Export, count)
 	for i := range count {
@@ -467,11 +492,11 @@ func decodeCoreModuleSection(buf []byte, offset int, sectionStart int, sectionSi
 func decodeCoreInstanceSection(buf []byte, offset int, sectionSize uint32) ([]CoreInstance, int, error) {
 	sectionStart := offset
 
-	count, n, err := leb128.LoadUint32(buf[offset:])
+	count, next, err := readBoundedVecCount(buf, offset, 1)
 	if err != nil {
 		return nil, offset, fmt.Errorf("read count: %w", err)
 	}
-	offset += int(n)
+	offset = next
 
 	instances := make([]CoreInstance, count)
 	for i := range count {
@@ -494,11 +519,11 @@ func decodeCoreInstanceSection(buf []byte, offset int, sectionSize uint32) ([]Co
 			instance.ModuleIdx = moduleIdx
 
 			// Read args: vec(core:instantiatearg)
-			argCount, n, err := leb128.LoadUint32(buf[offset:])
+			argCount, next, err := readBoundedVecCount(buf, offset, 1)
 			if err != nil {
 				return nil, offset, fmt.Errorf("instance[%d] arg count: %w", i, err)
 			}
-			offset += int(n)
+			offset = next
 
 			args := make([]CoreInstantiateArg, argCount)
 			for j := range argCount {
@@ -527,11 +552,11 @@ func decodeCoreInstanceSection(buf []byte, offset int, sectionSize uint32) ([]Co
 			instance.Args = args
 
 		case 0x01: // inline exports: vec(core:inlineexport)
-			exportCount, n, err := leb128.LoadUint32(buf[offset:])
+			exportCount, next, err := readBoundedVecCount(buf, offset, 1)
 			if err != nil {
 				return nil, offset, fmt.Errorf("instance[%d] export count: %w", i, err)
 			}
-			offset += int(n)
+			offset = next
 
 			exports := make([]CoreInlineExport, exportCount)
 			for j := range exportCount {
@@ -584,11 +609,11 @@ func decodeCoreInstanceSection(buf []byte, offset int, sectionSize uint32) ([]Co
 func decodeInstanceSection(buf []byte, offset int, sectionSize uint32) ([]Instance, int, error) {
 	sectionStart := offset
 
-	count, n, err := leb128.LoadUint32(buf[offset:])
+	count, next, err := readBoundedVecCount(buf, offset, 1)
 	if err != nil {
 		return nil, offset, fmt.Errorf("read count: %w", err)
 	}
-	offset += int(n)
+	offset = next
 
 	instances := make([]Instance, count)
 	for i := range count {
@@ -611,11 +636,11 @@ func decodeInstanceSection(buf []byte, offset int, sectionSize uint32) ([]Instan
 			instance.ComponentIdx = componentIdx
 
 			// Read args: vec(instantiatearg)
-			argCount, n, err := leb128.LoadUint32(buf[offset:])
+			argCount, next, err := readBoundedVecCount(buf, offset, 1)
 			if err != nil {
 				return nil, offset, fmt.Errorf("instance[%d] arg count: %w", i, err)
 			}
-			offset += int(n)
+			offset = next
 
 			args := make([]InstantiateArg, argCount)
 			for j := range argCount {
@@ -642,11 +667,11 @@ func decodeInstanceSection(buf []byte, offset int, sectionSize uint32) ([]Instan
 			instance.Args = args
 
 		case 0x01: // inline exports: vec(inlineexport)
-			exportCount, n, err := leb128.LoadUint32(buf[offset:])
+			exportCount, next, err := readBoundedVecCount(buf, offset, 1)
 			if err != nil {
 				return nil, offset, fmt.Errorf("instance[%d] export count: %w", i, err)
 			}
-			offset += int(n)
+			offset = next
 
 			exports := make([]InlineExport, exportCount)
 			for j := range exportCount {
@@ -684,11 +709,11 @@ func decodeInstanceSection(buf []byte, offset int, sectionSize uint32) ([]Instan
 func decodeAliasSection(buf []byte, offset int, sectionSize uint32) ([]AliasDef, int, error) {
 	sectionStart := offset
 
-	count, n, err := leb128.LoadUint32(buf[offset:])
+	count, next, err := readBoundedVecCount(buf, offset, 1)
 	if err != nil {
 		return nil, offset, fmt.Errorf("read count: %w", err)
 	}
-	offset += int(n)
+	offset = next
 
 	aliases := make([]AliasDef, count)
 	for i := range count {
@@ -771,11 +796,11 @@ func decodeAliasSection(buf []byte, offset int, sectionSize uint32) ([]AliasDef,
 func decodeCanonSection(buf []byte, offset int, sectionSize uint32) ([]Canon, int, error) {
 	sectionStart := offset
 
-	count, n, err := leb128.LoadUint32(buf[offset:])
+	count, next, err := readBoundedVecCount(buf, offset, 1)
 	if err != nil {
 		return nil, offset, fmt.Errorf("read count: %w", err)
 	}
-	offset += int(n)
+	offset = next
 
 	canons := make([]Canon, count)
 	for i := range count {
@@ -1025,11 +1050,11 @@ func decodeBool(buf []byte, offset int) (bool, int, error) {
 
 // decodeCanonOpts decodes vec(canonopt).
 func decodeCanonOpts(buf []byte, offset int) ([]CanonOpt, int, error) {
-	count, n, err := leb128.LoadUint32(buf[offset:])
+	count, next, err := readBoundedVecCount(buf, offset, 1)
 	if err != nil {
 		return nil, offset, fmt.Errorf("read count: %w", err)
 	}
-	offset += int(n)
+	offset = next
 
 	opts := make([]CanonOpt, count)
 	for i := range count {
@@ -1075,11 +1100,11 @@ func decodeStartSection(buf []byte, offset int, sectionSize uint32) (*Start, int
 	offset += int(n)
 
 	// Read args: vec(valueidx)
-	argCount, n, err := leb128.LoadUint32(buf[offset:])
+	argCount, next, err := readBoundedVecCount(buf, offset, 1)
 	if err != nil {
 		return nil, offset, fmt.Errorf("arg count: %w", err)
 	}
-	offset += int(n)
+	offset = next
 
 	args := make([]uint32, argCount)
 	for i := range argCount {

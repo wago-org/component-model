@@ -139,6 +139,11 @@ func putCoreValueSlice(p *[]abi.CoreValue) {
 type Instance struct {
 	resolve abi.Resolver
 
+	// syncCallMu serializes top-level synchronous calls. Re-entry in the same
+	// call chain is recognized through syncCallContext so guest -> host -> guest
+	// callbacks do not recursively acquire the gate.
+	syncCallMu sync.Mutex
+
 	// --- CallAsync (host-side non-blocking calls, callasync.go) ---
 	asyncActive atomic.Bool       // a CallAsync is outstanding; external AsyncCall.Resolve queues instead of erroring
 	amu         sync.Mutex        // guards mailbox, pending, PendingCall.closed, and acond
@@ -368,7 +373,7 @@ type Instance struct {
 	// guestTask.fail/stackfulTask.fail, and every mayEnter check in
 	// async_lift.go, all of which now check poisoned first. Initialized
 	// false; never true for an instance that has never had a call fail.
-	poisoned bool
+	poisoned atomic.Bool
 
 	// inHostCall counts nested host-import invocations currently on the Go
 	// call stack (bracketed by buildHostWrapper/buildAsyncHostWrapper). Along
@@ -1116,6 +1121,12 @@ func Instantiate(ctx context.Context, r wazy.Runtime, componentBytes []byte, opt
 	if err != nil {
 		return nil, fmt.Errorf("component/instance: decode component: %w", err)
 	}
+	// Start definitions are decoded so tooling can inspect them, but execution
+	// is not implemented yet. Never instantiate while silently omitting their
+	// required side effects.
+	if comp.Start != nil {
+		return nil, fmt.Errorf("component/instance: component start sections are not supported")
+	}
 	// A pure component-level well-formedness check (validate-no-async-abi-
 	// for-sync-type.wast): every canon's `async` option must agree with the
 	// func TYPE it lifts/lowers. Deliberately run BEFORE dispatching to
@@ -1401,15 +1412,6 @@ func buildCoreFuncIndexSpace(comp *binary.Component) ([]string, error) {
 // all (the "stackful" sync-opts shape every stackful conformance suite
 // exercises, e.g. an async-typed export whose canon lift has no async/
 // callback option) -- stays legal and is not touched by this check.
-//
-// A lower's func type is resolvable only when canon.FuncIdx names a
-// top-level func IMPORT (ComponentFuncFromImport) -- a func ALIAS
-// (ComponentFuncFromAlias, e.g. `canon lower (func $sibling "x") async`)
-// targets another component instance's export, whose declared type isn't
-// part of THIS component's own TypeSpace/Imports and so can't be resolved
-// here; no vendored suite exercises an async-mismatched alias lower, so
-// that shape is silently skipped (not rejected, not asserted valid) rather
-// than guessed at.
 func validateAsyncCanonOptsAgreeWithTypes(comp *binary.Component) error {
 	for i, cn := range comp.Canons {
 		if cn.Kind != 0x00 && cn.Kind != 0x01 {
@@ -1430,30 +1432,96 @@ func validateAsyncCanonOptsAgreeWithTypes(comp *binary.Component) error {
 		var resolved bool
 		switch cn.Kind {
 		case 0x00: // lift: canon.TypeIdx names the func type directly
-			if td, err := comp.ResolveType(cn.TypeIdx); err == nil {
-				fd, resolved = td.(binary.FuncDesc)
+			td, err := comp.ResolveType(cn.TypeIdx)
+			if err != nil {
+				return fmt.Errorf("component/instance: canon[%d]: resolve async lift function type: %w", i, err)
 			}
+			var ok bool
+			fd, ok = td.(binary.FuncDesc)
+			if !ok {
+				return fmt.Errorf("component/instance: canon[%d]: async lift type is not a function", i)
+			}
+			resolved = true
 		case 0x01: // lower: canon.FuncIdx names a component-func-space entry
-			if int(cn.FuncIdx) >= len(comp.ComponentFuncSpace) {
-				continue
+			var err error
+			fd, err = resolveCanonLowerFuncDesc(comp, cn.FuncIdx, 0)
+			if err != nil {
+				return fmt.Errorf("component/instance: canon[%d]: resolve async lower function type: %w", i, err)
 			}
-			fe := comp.ComponentFuncSpace[cn.FuncIdx]
-			if fe.Kind != binary.ComponentFuncFromImport || int(fe.Import) >= len(comp.Imports) {
-				continue
-			}
-			im := comp.Imports[fe.Import]
-			if im.ExternType != 0x01 { // func
-				continue
-			}
-			if td, err := comp.ResolveType(im.ExternIndex); err == nil {
-				fd, resolved = td.(binary.FuncDesc)
-			}
+			resolved = true
 		}
 		if resolved && !fd.Async {
 			return fmt.Errorf("component/instance: canon[%d]: the `async` canonical option requires an async function type", i)
 		}
 	}
 	return nil
+}
+
+func resolveCanonLowerFuncDesc(comp *binary.Component, idx uint32, depth int) (binary.FuncDesc, error) {
+	if depth > 64 {
+		return binary.FuncDesc{}, fmt.Errorf("component function alias chain is too deep")
+	}
+	if int(idx) >= len(comp.ComponentFuncSpace) {
+		return binary.FuncDesc{}, fmt.Errorf("component function index %d is out of range", idx)
+	}
+	e := comp.ComponentFuncSpace[idx]
+	switch e.Kind {
+	case binary.ComponentFuncFromImport:
+		if int(e.Import) >= len(comp.Imports) {
+			return binary.FuncDesc{}, fmt.Errorf("function import index %d is out of range", e.Import)
+		}
+		im := comp.Imports[e.Import]
+		if im.ExternType != 0x01 {
+			return binary.FuncDesc{}, fmt.Errorf("import %q is not a function", im.Name)
+		}
+		td, err := comp.ResolveType(im.ExternIndex)
+		if err != nil {
+			return binary.FuncDesc{}, err
+		}
+		fd, ok := td.(binary.FuncDesc)
+		if !ok {
+			return binary.FuncDesc{}, fmt.Errorf("import %q type is not a function", im.Name)
+		}
+		return fd, nil
+	case binary.ComponentFuncFromExport:
+		if int(e.Export) >= len(comp.Exports) {
+			return binary.FuncDesc{}, fmt.Errorf("function export index %d is out of range", e.Export)
+		}
+		return resolveCanonLowerFuncDesc(comp, comp.Exports[e.Export].ExternIndex, depth+1)
+	case binary.ComponentFuncFromAlias:
+		if int(e.Alias) >= len(comp.Aliases) {
+			return binary.FuncDesc{}, fmt.Errorf("function alias index %d is out of range", e.Alias)
+		}
+		al := comp.Aliases[e.Alias]
+		if al.Sort != 0x01 || al.TargetKind != 0x00 {
+			return binary.FuncDesc{}, fmt.Errorf("function alias has unsupported target %#x/%#x", al.Sort, al.TargetKind)
+		}
+		instIdx, ok := comp.ResolveComponentInstance(al.InstanceIdx)
+		if !ok || instIdx >= len(comp.Instances) {
+			return binary.FuncDesc{}, fmt.Errorf("aliased instance %d cannot be resolved statically", al.InstanceIdx)
+		}
+		inst := comp.Instances[instIdx]
+		if inst.Kind != 0x00 || int(inst.ComponentIdx) >= len(comp.NestedComponents) {
+			return binary.FuncDesc{}, fmt.Errorf("aliased instance %d is not a nested component instantiation", al.InstanceIdx)
+		}
+		fd, _, err := resolveStaticExportFuncDesc(comp.NestedComponents[inst.ComponentIdx], al.Name)
+		return fd, err
+	case binary.ComponentFuncFromCanonLift:
+		if int(e.Canon) >= len(comp.Canons) {
+			return binary.FuncDesc{}, fmt.Errorf("lift index %d is out of range", e.Canon)
+		}
+		td, err := comp.ResolveType(comp.Canons[e.Canon].TypeIdx)
+		if err != nil {
+			return binary.FuncDesc{}, err
+		}
+		fd, ok := td.(binary.FuncDesc)
+		if !ok {
+			return binary.FuncDesc{}, fmt.Errorf("lift type is not a function")
+		}
+		return fd, nil
+	default:
+		return binary.FuncDesc{}, fmt.Errorf("unsupported component function source %d", e.Kind)
+	}
 }
 
 // validateCanons checks that every canon in a no-import component is a
@@ -1599,6 +1667,11 @@ func (in *Instance) invoke(ctx context.Context, be *boundExport, exportName stri
 	if be.stackful {
 		return target.invokeStackful(ctx, be, exportName, args)
 	}
+	if !syncCallContains(ctx, target) {
+		target.syncCallMu.Lock()
+		defer target.syncCallMu.Unlock()
+		ctx = context.WithValue(ctx, syncCallContextKey{}, &syncCallContext{instance: target, parent: syncCallFrom(ctx)})
+	}
 	// target.poisoned mirrors the async paths' own check (async_lift.go) --
 	// a sync export gets no enterRun/leaveRun bracketing (mayEnter never
 	// applies to it), but it still must stay permanently un-enterable once
@@ -1608,7 +1681,7 @@ func (in *Instance) invoke(ctx context.Context, be *boundExport, exportName stri
 	// mayEnter/poisoned check precedes ITS own param-count check -- a
 	// poisoned instance refuses entry outright, independent of whether this
 	// particular call would otherwise even be well-formed.
-	if target.poisoned {
+	if target.poisoned.Load() {
 		return nil, fmt.Errorf("component/instance: export %q: cannot enter component instance", exportName)
 	}
 	fd := be.fd
@@ -1626,6 +1699,27 @@ func (in *Instance) invoke(ctx context.Context, be *boundExport, exportName stri
 		return nil, fmt.Errorf("component/instance: export %q: flatten func type: %w", exportName, be.flattenErr)
 	}
 	return target.invokeEntered(ctx, be, exportName, args)
+}
+
+type syncCallContextKey struct{}
+
+type syncCallContext struct {
+	instance *Instance
+	parent   *syncCallContext
+}
+
+func syncCallFrom(ctx context.Context) *syncCallContext {
+	v, _ := ctx.Value(syncCallContextKey{}).(*syncCallContext)
+	return v
+}
+
+func syncCallContains(ctx context.Context, in *Instance) bool {
+	for call := syncCallFrom(ctx); call != nil; call = call.parent {
+		if call.instance == in {
+			return true
+		}
+	}
+	return false
 }
 
 // wrapUnreachableTrap prepends wasmtime's canonical unreachable-trap wording
@@ -1702,6 +1796,10 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 	coreArgs, err := in.lowerParams(be, args, mem, memAvailable, realloc, exportName, *coreArgsPtr)
 	if err != nil {
 		coreValueSlicePool.Put(coreArgsPtr)
+		var guestErr guestCallError
+		if errors.As(err, &guestErr) {
+			in.poisoned.Store(true)
+		}
 		return nil, err
 	}
 	*coreArgsPtr = coreArgs
@@ -1737,7 +1835,7 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 
 	if err := callCoreWithStack(ctx, be.coreFn, stack); err != nil {
 		putUint64Slice(stackPtr)
-		in.poisoned = true // guest code actually ran and trapped -- see this func's doc
+		in.poisoned.Store(true) // guest code actually ran and trapped -- see this func's doc
 		err = wrapUnreachableTrap(err)
 		return nil, fmt.Errorf("component/instance: export %q: call core func %q: %w", exportName, be.funcName, err)
 	}
@@ -1769,7 +1867,7 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 		// it reuse rawResults' own buffer (the guest reads params, writes none).
 		if err := callCoreWithStack(ctx, be.postReturnFn, rawResults); err != nil {
 			putUint64Slice(stackPtr)
-			in.poisoned = true // guest code actually ran and trapped -- see this func's doc
+			in.poisoned.Store(true) // guest code actually ran and trapped -- see this func's doc
 			return nil, fmt.Errorf("component/instance: export %q: post-return %q: %w", exportName, be.postReturnFuncName, err)
 		}
 	}
@@ -2065,6 +2163,8 @@ func safeExportedFunction(mod api.Module, name string) (fn api.Function) {
 // order of instantiation). It does not close the Runtime passed to
 // Instantiate, which the caller owns.
 func (in *Instance) Close(ctx context.Context) error {
+	in.syncCallMu.Lock()
+	defer in.syncCallMu.Unlock()
 	in.amu.Lock()
 	p := in.pending
 	in.amu.Unlock()
@@ -2086,6 +2186,11 @@ func (in *Instance) Close(ctx context.Context) error {
 		in.assertThreadsQuiescent("Close/after-reap")
 	}
 	var firstErr error
+	if in.resources != nil {
+		if err := in.resources.close(ctx); err != nil {
+			firstErr = err
+		}
+	}
 	for i := len(in.closers) - 1; i >= 0; i-- {
 		if err := in.closers[i].Close(ctx); err != nil && firstErr == nil {
 			firstErr = err
@@ -2154,11 +2259,19 @@ func coreReallocCall(fn api.Function) func(context.Context, uint32, uint32, uint
 		var buf [4]uint64
 		buf[0], buf[1], buf[2], buf[3] = uint64(origPtr), uint64(origSize), uint64(align), uint64(newSize)
 		if err := fn.CallWithStack(ctx, buf[:]); err != nil {
-			return 0, fmt.Errorf("cabi_realloc: %w", err)
+			return 0, guestCallError{err: fmt.Errorf("cabi_realloc: %w", err)}
 		}
 		return uint32(buf[0]), nil
 	}
 }
+
+// guestCallError distinguishes a failure returned after guest code was
+// entered from host-side ABI validation failures, which must not poison an
+// instance.
+type guestCallError struct{ err error }
+
+func (e guestCallError) Error() string { return e.err.Error() }
+func (e guestCallError) Unwrap() error { return e.err }
 
 // reallocOfFunc builds an abi.Realloc for a caller that already resolved the
 // exact realloc func to call (e.g. buildHostWrapper, via a canon lower's own
