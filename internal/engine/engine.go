@@ -117,6 +117,13 @@ func (c ModuleConfig) WithStartFunctions(...string) ModuleConfig { return c }
 
 type CompiledModule interface{ Close(context.Context) error }
 
+func cleanupContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
+}
+
 type Runtime interface {
 	InstantiateWithConfig(context.Context, []byte, ModuleConfig) (Module, error)
 	CompileModule(context.Context, []byte) (CompiledModule, error)
@@ -130,24 +137,37 @@ type CoreFuncImport struct {
 	Params, Results []ValueType
 }
 
-type runtimeAdapter struct{ rt core.CoreRuntime }
+type runtimeAdapter struct {
+	compiler     *core.CoreModuleCompiler
+	instantiator *core.CoreInstanceInstantiator
+	funcrefs     *core.CoreFuncRefFactory
+}
 
-func Wrap(rt core.CoreRuntime) Runtime { return &runtimeAdapter{rt: rt} }
+func Wrap(compiler *core.CoreModuleCompiler, instantiator *core.CoreInstanceInstantiator, funcrefs *core.CoreFuncRefFactory) Runtime {
+	return &runtimeAdapter{compiler: compiler, instantiator: instantiator, funcrefs: funcrefs}
+}
 
 type compiledModule struct{ mod *core.Module }
 
-func (c *compiledModule) Close(context.Context) error { return c.mod.Close() }
+func (c *compiledModule) Close(context.Context) error {
+	if c == nil || c.mod == nil || c.mod.Compiled() == nil {
+		return nil
+	}
+	err := c.mod.Compiled().Close()
+	c.mod = nil
+	return err
+}
 
 func (r *runtimeAdapter) CompileModule(ctx context.Context, source []byte) (CompiledModule, error) {
-	if r == nil || r.rt == nil {
-		return nil, fmt.Errorf("component: nil Wago runtime")
-	}
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 	}
-	m, err := r.rt.Compile(append([]byte(nil), source...))
+	if r == nil || r.compiler == nil {
+		return nil, fmt.Errorf("component: nil core module compiler")
+	}
+	m, err := r.compiler.Compile(append([]byte(nil), source...))
 	if err != nil {
 		return nil, err
 	}
@@ -159,6 +179,7 @@ func (r *runtimeAdapter) InspectModuleImports(ctx context.Context, source []byte
 	if err != nil {
 		return nil, err
 	}
+	defer c.Close(cleanupContext(ctx))
 	cm := c.(*compiledModule)
 	imports := cm.mod.Imports()
 	out := make([]CoreFuncImport, 0, len(imports))
@@ -176,13 +197,24 @@ func (r *runtimeAdapter) InstantiateWithConfig(ctx context.Context, source []byt
 	if err != nil {
 		return nil, err
 	}
-	return r.InstantiateModule(ctx, c, cfg)
+	mod, err := r.instantiateModule(ctx, c, cfg, true)
+	if err != nil {
+		_ = c.Close(cleanupContext(ctx))
+	}
+	return mod, err
 }
 
 func (r *runtimeAdapter) InstantiateModule(ctx context.Context, c CompiledModule, cfg ModuleConfig) (Module, error) {
+	return r.instantiateModule(ctx, c, cfg, false)
+}
+
+func (r *runtimeAdapter) instantiateModule(ctx context.Context, c CompiledModule, cfg ModuleConfig, closeCompiled bool) (Module, error) {
 	cm, ok := c.(*compiledModule)
 	if !ok || cm == nil || cm.mod == nil {
 		return nil, fmt.Errorf("component: compiled module belongs to another runtime")
+	}
+	if r == nil || r.instantiator == nil || r.funcrefs == nil {
+		return nil, fmt.Errorf("component: incomplete core execution handles")
 	}
 	imports := core.Imports{}
 	resolvedFuncs := map[string]Function{}
@@ -227,7 +259,7 @@ func (r *runtimeAdapter) InstantiateModule(ctx context.Context, c CompiledModule
 				})
 			}
 			if host != nil {
-				owner, err := r.rt.NewHostFuncRef(host, core.FuncSig{
+				owner, err := r.funcrefs.New(host, core.FuncSig{
 					Params:  append([]core.ValType(nil), spec.Params...),
 					Results: append([]core.ValType(nil), spec.Results...),
 				})
@@ -255,24 +287,36 @@ func (r *runtimeAdapter) InstantiateModule(ctx context.Context, c CompiledModule
 			}
 		}
 	}
-	in, err := r.rt.Instantiate(ctx, cm.mod, core.WithImports(imports), core.WithSynchronousHostCalls())
+	owned, err := r.instantiator.Instantiate(ctx, cm.mod, core.WithImports(imports), core.WithSynchronousHostCalls())
 	if err != nil {
 		closeHostRefs()
 		return nil, err
 	}
-	return newModule(cfg.name, in, cm.mod, resolvedFuncs, hostRefs), nil
+	in := owned.Instance()
+	if in == nil {
+		_ = owned.Close()
+		closeHostRefs()
+		return nil, fmt.Errorf("component: core instantiator returned a closed instance")
+	}
+	var compiledOwner *compiledModule
+	if closeCompiled {
+		compiledOwner = cm
+	}
+	return newModule(cfg.name, owned, in, cm.mod, compiledOwner, resolvedFuncs, hostRefs), nil
 }
 
 type module struct {
 	name      string
+	owned     *core.ManagedInstance
 	in        *core.Instance
+	compiled  *compiledModule
 	defs      map[string]FunctionDefinition
 	forwarded map[string]Function
 	hostRefs  []*core.HostFuncRef
 }
 
-func newModule(name string, in *core.Instance, compiled *core.Module, resolved map[string]Function, hostRefs []*core.HostFuncRef) *module {
-	m := &module{name: name, in: in, defs: map[string]FunctionDefinition{}, forwarded: map[string]Function{}, hostRefs: hostRefs}
+func newModule(name string, owned *core.ManagedInstance, in *core.Instance, compiled *core.Module, compiledOwner *compiledModule, resolved map[string]Function, hostRefs []*core.HostFuncRef) *module {
+	m := &module{name: name, owned: owned, in: in, compiled: compiledOwner, defs: map[string]FunctionDefinition{}, forwarded: map[string]Function{}, hostRefs: hostRefs}
 	for _, f := range compiled.Metadata().Functions {
 		for _, export := range f.Exports {
 			m.defs[export] = functionDefinition{params: valTypes(f.Params), results: valTypes(f.Results)}
@@ -344,12 +388,17 @@ func (m *module) ExportedGlobal(name string) Global {
 	}
 	return &global{g: g}
 }
-func (m *module) Close(context.Context) error {
-	err := m.in.Close()
+func (m *module) Close(ctx context.Context) error {
+	err := m.owned.Close()
+	m.owned = nil
 	for i := len(m.hostRefs) - 1; i >= 0; i-- {
 		err = errors.Join(err, m.hostRefs[i].Close())
 	}
 	m.hostRefs = nil
+	if m.compiled != nil {
+		err = errors.Join(err, m.compiled.Close(cleanupContext(ctx)))
+		m.compiled = nil
+	}
 	return err
 }
 
@@ -438,7 +487,6 @@ func (g *global) Set(v uint64)    { _ = g.g.Set(v) }
 var _ = binary.LittleEndian
 
 type HostModuleBuilder struct {
-	rt      *runtimeAdapter
 	name    string
 	funcs   map[string]*hostFunction
 	pending *hostFunction
@@ -446,7 +494,7 @@ type HostModuleBuilder struct {
 type HostFunctionBuilder struct{ parent HostModuleBuilder }
 
 func (r *runtimeAdapter) NewHostModuleBuilder(name string) HostModuleBuilder {
-	return HostModuleBuilder{rt: r, name: name, funcs: map[string]*hostFunction{}}
+	return HostModuleBuilder{name: name, funcs: map[string]*hostFunction{}}
 }
 func (b HostModuleBuilder) NewFunctionBuilder() HostFunctionBuilder {
 	return HostFunctionBuilder{parent: b}

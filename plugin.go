@@ -1,109 +1,162 @@
 package component
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 
 	"github.com/wago-org/component-model/internal/engine"
 	"github.com/wago-org/component-model/internal/instance"
 	"github.com/wago-org/wago"
-	"github.com/wago-org/wago/plugin"
+	wagoplugin "github.com/wago-org/wago/plugin"
 )
 
-// PluginID is the stable extension ID for the Component Model runtime.
-const PluginID = "wago-org/component-model"
+// PluginID is the canonical Component Model plugin ID.
+const PluginID = "github.com/wago-org/component-model"
 
-// ServiceName is the versioned Component Model runtime service consumed by
-// plugins that provide component-level worlds such as WASI Preview 2.
-const ServiceName = "wago-org/component-model/runtime/v1"
+const (
+	// Wago charges an unbounded memory32 declaration at its finite 65,535-page
+	// implementation reservation. Sixteen GiB therefore admits four ordinary
+	// unbounded-memory modules while the separate slot limit leaves room for
+	// memoryless adapters and linker shims.
+	requestedMaxCoreInstances   = 64
+	requestedMaxCoreMemoryBytes = 16 << 30
+)
 
-// Service is the public execution surface provided by the Component Model
-// plugin. Depending plugins should require RuntimeService rather than importing
-// engine internals or asking for core-runtime authority themselves.
+// Contract is the major-versioned Component Model execution service consumed
+// by WASI and other component-world plugins.
+var Contract = wagoplugin.NewContract[Service](PluginID+"/runtime", 1)
+
+// Service is the Component Model plugin's cross-plugin execution boundary.
+// WithInstance keeps the service and every core resource it creates inside the
+// caller's contract lease. The instance is closed before WithInstance returns
+// and must not be retained by fn.
 type Service interface {
-	Instantiate(context.Context, []byte, ...Option) (*Instance, error)
+	WithInstance(context.Context, []byte, func(*Instance) error, ...Option) error
 }
 
-// RuntimeService identifies the versioned Component Model execution service.
-var RuntimeService = plugin.NewServiceKey[Service](ServiceName)
+var configSchema = json.RawMessage(`{
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 0
+}`)
 
-func init() {
-	wago.RegisterExtension(PluginID, func() wago.Extension { return NewExtension() })
-}
-
-// Extension installs Component Model execution into a Wago runtime. Use Enable
-// for programmatic installation, or register NewExtension in a manifest-driven
-// host with the core.runtime plugin capability granted.
-type Extension struct {
-	runtime *Runtime
-}
-
-// NewExtension returns an unregistered Component Model extension.
-func NewExtension() *Extension { return &Extension{} }
-
-func (*Extension) Info() wago.ExtensionInfo {
-	return wago.ExtensionInfo{
-		ID:                   PluginID,
-		Name:                 "WebAssembly Component Model",
-		Description:          "Decodes, links, and executes WebAssembly Components",
-		Stability:            wago.Experimental,
-		Repository:           "https://github.com/wago-org/component-model",
-		License:              "Apache-2.0",
-		Tags:                 []string{"component-model", "canonical-abi"},
-		RequiresCapabilities: []wago.PluginCapability{wago.PluginCoreRuntime},
+// Definition returns fresh immutable metadata for the explicit provider.
+func Definition() wago.PluginDefinition {
+	return wago.PluginDefinition{
+		ID:          PluginID,
+		Name:        "Wago Component Model",
+		Version:     "0.1.0",
+		Description: "WebAssembly Component Model execution and Canonical ABI linking for Wago.",
+		Stability:   wago.Experimental,
+		Compatibility: wago.Compatibility{
+			Engines: map[string]string{"wago": ">=0.1.0"},
+		},
+		Provenance: wago.PluginProvenance{
+			Homepage:   "https://github.com/wago-org/component-model#readme",
+			Repository: "https://github.com/wago-org/component-model",
+			License:    "Apache-2.0",
+			Authors:    []string{"Jairus Tanaka"},
+		},
+		Authorities: []wago.AuthorityRequest{
+			{
+				Name:   wago.AuthorityCoreModuleCompile,
+				Mode:   wago.AuthorityRequired,
+				Reason: "compile the core WebAssembly modules embedded in a component",
+			},
+			{
+				Name:   wago.AuthorityCoreInstanceInstantiate,
+				Mode:   wago.AuthorityRequired,
+				Reason: "instantiate and own the bounded core-module graph behind a component instance",
+				Scope: wago.AuthorityScope{
+					MaxInstances:   requestedMaxCoreInstances,
+					MaxMemoryBytes: requestedMaxCoreMemoryBytes,
+				},
+			},
+			{
+				Name:   wago.AuthorityCoreFuncRefCreate,
+				Mode:   wago.AuthorityRequired,
+				Reason: "bridge Canonical ABI lifts and lowers through typed host function references",
+			},
+		},
+		ConfigSchema: append(json.RawMessage(nil), configSchema...),
+		Provides:     []wago.ContractSpec{Contract.Spec()},
 	}
 }
 
-func (e *Extension) Register(reg *wago.Registry) error {
-	access, err := reg.CoreRuntime()
+// Provider is the side-effect-free catalog entry for Component Model support.
+func Provider() wago.PluginProvider {
+	return wago.PluginProvider{
+		Definition:     Definition(),
+		New:            func() wago.Plugin { return new(componentPlugin) },
+		ValidateConfig: validateConfig,
+	}
+}
+
+func validateConfig(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var cfg struct{}
+	if err := dec.Decode(&cfg); err != nil {
+		return fmt.Errorf("component: config: %w", err)
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("component: config must be an object")
+	}
+	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("component: config has a trailing JSON value")
+	}
+	return nil
+}
+
+type componentPlugin struct{}
+
+func (*componentPlugin) Register(reg *wago.Registrar) error {
+	var cfg struct{}
+	if err := reg.Config(&cfg); err != nil {
+		return err
+	}
+	compiler, err := reg.CoreModuleCompiler()
 	if err != nil {
 		return err
 	}
-	e.runtime = &Runtime{engine: access}
-	return plugin.Provide[Service](reg, RuntimeService, e.runtime)
+	instantiator, err := reg.CoreInstanceInstantiator()
+	if err != nil {
+		return err
+	}
+	funcrefs, err := reg.CoreFuncRefFactory()
+	if err != nil {
+		return err
+	}
+	service := &runtimeService{engine: engine.Wrap(compiler, instantiator, funcrefs)}
+	return wagoplugin.Provide(reg, Contract, Service(service))
 }
 
-// Runtime is the capability-scoped Component Model execution service installed
-// in one Wago runtime. It cannot be moved to or used with another runtime.
-type Runtime struct {
-	engine wago.CoreRuntime
+type runtimeService struct {
+	engine engine.Runtime
 }
 
-// Enable installs the Component Model plugin with its required authority and
-// returns the runtime-scoped component service.
-func Enable(rt *wago.Runtime) (*Runtime, error) {
-	if rt == nil {
-		return nil, fmt.Errorf("component: enable on nil Wago runtime")
-	}
-	if err := rt.UsePlugin(PluginID, wago.WithPluginGrants(wago.PluginCoreRuntime)); err != nil {
-		return nil, err
-	}
-	return FromRuntime(rt)
-}
-
-// FromRuntime resolves the installed Component Model plugin. It fails closed
-// when the plugin is absent, has the wrong concrete implementation, or its
-// runtime authority has been revoked.
-func FromRuntime(rt *wago.Runtime) (*Runtime, error) {
-	if rt == nil {
-		return nil, fmt.Errorf("component: nil Wago runtime")
-	}
-	ext, ok := rt.Extension(PluginID)
-	if !ok {
-		return nil, fmt.Errorf("component: plugin %q is not enabled", PluginID)
-	}
-	plugin, ok := ext.(*Extension)
-	if !ok || plugin == nil || plugin.runtime == nil || plugin.runtime.engine == nil {
-		return nil, fmt.Errorf("component: plugin %q has an invalid implementation", PluginID)
-	}
-	return plugin.runtime, nil
-}
-
-// Instantiate decodes and instantiates a component through this plugin's
-// authorized core-runtime handle.
-func (r *Runtime) Instantiate(ctx context.Context, componentBytes []byte, opts ...Option) (*Instance, error) {
+func (r *runtimeService) WithInstance(ctx context.Context, componentBytes []byte, fn func(*Instance) error, opts ...Option) (err error) {
 	if r == nil || r.engine == nil {
-		return nil, fmt.Errorf("component: nil or inactive component runtime")
+		return fmt.Errorf("component: inactive component service")
 	}
-	return instance.Instantiate(ctx, engine.Wrap(r.engine), componentBytes, opts...)
+	if ctx == nil {
+		return fmt.Errorf("component: nil context")
+	}
+	if fn == nil {
+		return fmt.Errorf("component: nil instance callback")
+	}
+	in, err := instance.Instantiate(ctx, r.engine, componentBytes, opts...)
+	if err != nil {
+		return err
+	}
+	closeCtx := context.WithoutCancel(ctx)
+	defer func() { err = errors.Join(err, in.Close(closeCtx)) }()
+	return fn(in)
 }

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://wago.sh/v1/providers.schema.json",
+  "providers": [
+    {
+      "importPath": "github.com/wago-org/component-model/register",
+      "definition": {
+        "id": "github.com/wago-org/component-model",
+        "name": "Wago Component Model",
+        "version": "0.1.0",
+        "description": "WebAssembly Component Model execution and Canonical ABI linking for Wago.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/component-model#readme",
+          "repository": "https://github.com/wago-org/component-model",
+          "license": "Apache-2.0",
+          "authors": [
+            "Jairus Tanaka"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "core.funcref.create",
+            "mode": "required",
+            "reason": "bridge Canonical ABI lifts and lowers through typed host function references",
+            "scope": {}
+          },
+          {
+            "name": "core.instance.instantiate",
+            "mode": "required",
+            "reason": "instantiate and own the bounded core-module graph behind a component instance",
+            "scope": {
+              "maxInstances": 64,
+              "maxMemoryBytes": 17179869184
+            }
+          },
+          {
+            "name": "core.module.compile",
+            "mode": "required",
+            "reason": "compile the core WebAssembly modules embedded in a component",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "maxProperties": 0,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/component-model/runtime",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:3f72634f84e8ffad0b7460f755b56b56c643b4e04f930579db08d41b3dd7083f"
+    }
+  ]
+}
