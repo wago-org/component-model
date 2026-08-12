@@ -1,13 +1,17 @@
 {
-  "$schema": "https://wago.sh/v0/schema.json",
-  "module": "github.com/wago-org/component-model",
-  "version": "0.0.0",
-  "name": "Wago Component Model",
-  "short": "component-model",
-  "description": "Capability-gated WebAssembly Component Model runtime for Wago plugins.",
-  "license": "Apache-2.0",
-  "repository": "https://github.com/wago-org/component-model",
-  "homepage": "https://github.com/wago-org/component-model#readme",
-  "category": "runtime",
-  "tags": ["webassembly", "component-model", "canonical-abi"]
+  "$schema": "https://wago.sh/v1/schema.json",
+  "package": {
+    "module": "github.com/wago-org/component-model",
+    "version": "0.1.0",
+    "name": "Wago Component Model",
+    "description": "WebAssembly Component Model execution and Canonical ABI linking for Wago.",
+    "stability": "experimental",
+    "license": "Apache-2.0",
+    "repository": "https://github.com/wago-org/component-model",
+    "homepage": "https://github.com/wago-org/component-model#readme",
+    "category": "runtime",
+    "tags": ["webassembly", "component-model", "canonical-abi", "runtime"],
+    "authors": [{"name": "Jairus Tanaka", "github": "JairusSW"}],
+    "engines": {"wago": ">=0.1.0"}
+  }
 }
