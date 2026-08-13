@@ -533,6 +533,93 @@ func TestInstanceCloseDrainsResourcesBeforeModules(t *testing.T) {
 	}
 }
 
+func TestDropOwnedRunsTypedDestructorBeforeConsumingHandle(t *testing.T) {
+	table := newHandleTable()
+	wantErr := errors.New("destructor failed")
+	fail := true
+	table.registerDtor(7, func(context.Context, uint32) error {
+		if fail {
+			return wantErr
+		}
+		return nil
+	})
+	h := table.NewOwn(7, 42)
+	if _, _, _, err := table.dropOwnedWithDtor(context.Background(), h); !errors.Is(err, wantErr) {
+		t.Fatalf("drop error = %v, want destructor error", err)
+	}
+	if rep, err := table.Rep(7, h); err != nil || rep != 42 {
+		t.Fatalf("handle after destructor error = (%d, %v), want live rep 42", rep, err)
+	}
+	fail = false
+	typeIdx, rep, guestDtor, err := table.dropOwnedWithDtor(context.Background(), h)
+	if err != nil || typeIdx != 7 || rep != 42 || !guestDtor {
+		t.Fatalf("successful drop = (type %d, rep %d, guest %v, %v)", typeIdx, rep, guestDtor, err)
+	}
+	if _, err := table.Rep(7, h); err == nil {
+		t.Fatal("handle remained live after successful destructor")
+	}
+}
+
+func TestDropResourceGuestDestructorTrapPoisonsAndRetainsHandle(t *testing.T) {
+	table := newHandleTable()
+	table.registerDtor(7, func(context.Context, uint32) error { return errors.New("guest trap") })
+	h := table.NewOwn(7, 42)
+	in := &Instance{resources: table}
+	if err := in.DropResource(context.Background(), "diagnostic:only/type", "resource", h); err == nil {
+		t.Fatal("expected destructor trap")
+	}
+	if !in.poisoned.Load() {
+		t.Fatal("guest destructor trap did not poison instance")
+	}
+	if rep, err := table.Rep(7, h); err != nil || rep != 42 {
+		t.Fatalf("handle after trap = (%d, %v), want live rep 42", rep, err)
+	}
+}
+
+func TestCompileCacheCloseIsTerminalAndClearsMetadata(t *testing.T) {
+	cache := NewCompileCache()
+	comp := &binary.Component{}
+	cache.byComp["component"] = comp
+	cache.byABI[comp] = map[uint32]*boundExportABI{0: {}}
+	cache.byPlan[comp] = &graphPlan{}
+	if err := cache.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.closed || len(cache.byComp) != 0 || len(cache.byABI) != 0 || len(cache.byPlan) != 0 {
+		t.Fatalf("closed cache retained metadata: closed=%v comp=%d abi=%d plan=%d", cache.closed, len(cache.byComp), len(cache.byABI), len(cache.byPlan))
+	}
+	if _, err := cache.getOrDecode(nil); !errors.Is(err, errCompileCacheClosed) {
+		t.Fatalf("getOrDecode after Close = %v, want closed error", err)
+	}
+	if err := cache.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestCompileCacheCloseCannotRaceMetadataRepopulation(t *testing.T) {
+	cache := NewCompileCache()
+	comp := &binary.Component{}
+	start := make(chan struct{})
+	done := make(chan struct{}, 32)
+	for i := range 32 {
+		go func(idx int) {
+			<-start
+			cache.abiFor(comp, uint32(idx), func() *boundExportABI { return &boundExportABI{} })
+			done <- struct{}{}
+		}(i)
+	}
+	close(start)
+	if err := cache.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for range 32 {
+		<-done
+	}
+	if len(cache.byABI) != 0 {
+		t.Fatalf("closed cache was repopulated with %d ABI entries", len(cache.byABI))
+	}
+}
+
 func TestHostStateFactoryIsPerConfig(t *testing.T) {
 	type state struct{ n int }
 	key := struct{}{}
