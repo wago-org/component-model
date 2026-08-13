@@ -136,6 +136,56 @@ func TestStaticResultShapeErrorDoesNotPoisonInstance(t *testing.T) {
 	}
 }
 
+func TestCanonicalLiftOptionsRequireGraphPath(t *testing.T) {
+	for _, kind := range []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07} {
+		comp := &binary.Component{Canons: []binary.Canon{{Kind: binary.CanonKindLift, Opts: []binary.CanonOpt{{Kind: kind}}}}}
+		if !needsGraphPath(comp) {
+			t.Fatalf("canon lift option %#x did not require graph path", kind)
+		}
+	}
+}
+
+func TestImportKeysUseComponentModelVersionCompatibility(t *testing.T) {
+	tests := []struct {
+		a, b  string
+		equal bool
+	}{
+		{"wasi:io/streams@0.2.3", "wasi:io/streams@0.2.12", true},
+		{"wasi:io/streams@0.2.6-rc.1", "wasi:io/streams@0.2.12+build.7", true},
+		{"wasi:io/streams@0.2.3", "wasi:io/streams@0.3.0", false},
+		{"example:pkg/api@1.1.0", "example:pkg/api@1.9.7", true},
+		{"example:pkg/api@1.1.0", "example:pkg/api@2.0.0", false},
+		{"example:pkg/api@0.0.5", "example:pkg/api@0.0.6", false},
+		{"example:pkg/api@not-semver", "example:pkg/api@also-bad", false},
+		{"example:pkg/api@1.2.3-01", "example:pkg/api@1.9.0", false},
+	}
+	for _, tc := range tests {
+		a := mkImportKey(tc.a, "run")
+		b := mkImportKey(tc.b, "run")
+		if got := a == b; got != tc.equal {
+			t.Errorf("mkImportKey(%q) == mkImportKey(%q) is %v, want %v (%q vs %q)", tc.a, tc.b, got, tc.equal, a.iface, b.iface)
+		}
+	}
+}
+
+func TestDuplicateCompatibleImportRegistrationIsRejected(t *testing.T) {
+	fn := func(context.Context, []abi.Value) ([]abi.Value, error) { return nil, nil }
+	cfg := newConfig([]Option{
+		WithImport("wasi:io/streams@0.2.3", "run", fn, nil, nil),
+		WithImport("wasi:io/streams@0.2.12", "run", fn, nil, nil),
+	})
+	if cfg.registrationErr == nil {
+		t.Fatal("compatible duplicate registration was accepted")
+	}
+}
+
+func TestNonUTF8CanonicalEncodingIsRejected(t *testing.T) {
+	comp := &binary.Component{Canons: []binary.Canon{{Kind: binary.CanonKindLift, Opts: []binary.CanonOpt{{Kind: 0x01}}}}}
+	if err := validateCanonicalStringEncodings(comp); err == nil {
+		t.Fatal("UTF-16 canonical option was accepted")
+	}
+}
+
 func TestSynchronousInvocationsAreSerialized(t *testing.T) {
 	started := make(chan struct{}, 2)
 	release := make(chan struct{}, 2)

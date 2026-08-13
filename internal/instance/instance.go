@@ -1106,6 +1106,9 @@ func finalizeBoundExport(be *boundExport, resolve abi.Resolver, abiCache *Compil
 // anything outside them is rejected with a descriptive error.
 func Instantiate(ctx context.Context, r wazy.Runtime, componentBytes []byte, opts ...Option) (*Instance, error) {
 	cfg := newConfig(opts)
+	if cfg.registrationErr != nil {
+		return nil, cfg.registrationErr
+	}
 
 	// With a CompileCache, reuse the decoded (immutable) component across
 	// repeated instantiations instead of re-parsing the binary every call --
@@ -1120,6 +1123,9 @@ func Instantiate(ctx context.Context, r wazy.Runtime, componentBytes []byte, opt
 	}
 	if err != nil {
 		return nil, fmt.Errorf("component/instance: decode component: %w", err)
+	}
+	if err := validateCanonicalStringEncodings(comp); err != nil {
+		return nil, err
 	}
 	// Start definitions are decoded so tooling can inspect them, but execution
 	// is not implemented yet. Never instantiate while silently omitting their
@@ -1151,6 +1157,20 @@ func Instantiate(ctx context.Context, r wazy.Runtime, componentBytes []byte, opt
 	return instantiateComponent(ctx, r, comp, componentBytes)
 }
 
+func validateCanonicalStringEncodings(comp *binary.Component) error {
+	for i, canon := range comp.Canons {
+		for _, opt := range canon.Opts {
+			switch opt.Kind {
+			case 0x01:
+				return fmt.Errorf("component/instance: canon %d requests UTF-16 string encoding, which is not supported", i)
+			case 0x02:
+				return fmt.Errorf("component/instance: canon %d requests Latin-1+UTF-16 string encoding, which is not supported", i)
+			}
+		}
+	}
+	return nil
+}
+
 // needsGraphPath and needsImportPath together select the graph engine
 // (instantiateGraph) for any component that has host imports or a non-trivial
 // core structure; a component matching neither is the trivial single-embedded-
@@ -1160,6 +1180,19 @@ func Instantiate(ctx context.Context, r wazy.Runtime, componentBytes []byte, opt
 // table (not just funcs), and a core func index space where canon-produced
 // funcs (lower, resource.*) and core-level func aliases interleave.
 func needsGraphPath(comp *binary.Component) bool {
+	for _, canon := range comp.Canons {
+		if canon.Kind != binary.CanonKindLift {
+			continue
+		}
+		for _, opt := range canon.Opts {
+			// An explicit UTF-8 option is the direct path's existing default.
+			// Every other lift option needs graph resolution (or graph-path
+			// validation) so post-return/realloc/async semantics cannot vanish.
+			if opt.Kind != 0x00 {
+				return true
+			}
+		}
+	}
 	for _, ci := range comp.CoreInstances {
 		if ci.Kind != 0x01 {
 			continue
