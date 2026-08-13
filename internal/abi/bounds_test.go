@@ -69,6 +69,28 @@ func TestCheckedLayoutArithmeticRejectsOverflow(t *testing.T) {
 	}
 }
 
+func TestLayoutValidationRejectsRecursiveType(t *testing.T) {
+	idx := uint32(0)
+	record := bintype.RecordDesc{Fields: []bintype.RecordField{{Name: "next", Type: bintype.TypeRef{TypeIndex: &idx}}}}
+	resolve := func(uint32) bintype.TypeDesc { return record }
+	if err := validateLayoutType(record, resolve); err == nil {
+		t.Fatal("recursive record was accepted")
+	}
+}
+
+func TestLayoutValidationRejectsExcessiveDepth(t *testing.T) {
+	types := make([]bintype.TypeDesc, maxLayoutTypeDepth+2)
+	types[len(types)-1] = bintype.PrimitiveDesc{Prim: "u8"}
+	for i := len(types) - 2; i >= 0; i-- {
+		idx := uint32(i + 1)
+		types[i] = bintype.OptionDesc{Element: bintype.TypeRef{TypeIndex: &idx}}
+	}
+	resolve := func(idx uint32) bintype.TypeDesc { return types[idx] }
+	if err := validateLayoutType(types[0], resolve); err == nil {
+		t.Fatal("excessively deep type was accepted")
+	}
+}
+
 func assertReturnsErrorWithoutPanic(t *testing.T, fn func() error) {
 	t.Helper()
 	defer func() {

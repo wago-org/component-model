@@ -17,6 +17,76 @@ import (
 // Used to follow TypeRef indices during layout computation.
 type Resolver func(idx uint32) binary.TypeDesc
 
+const maxLayoutTypeDepth = 64
+
+func validateLayoutType(t binary.TypeDesc, resolve Resolver) error {
+	return validateLayoutDesc(t, resolve, 0, make(map[uint32]bool))
+}
+
+func validateLayoutDesc(t binary.TypeDesc, resolve Resolver, depth int, visiting map[uint32]bool) error {
+	if depth > maxLayoutTypeDepth {
+		return fmt.Errorf("canonical ABI type nesting exceeds depth %d", maxLayoutTypeDepth)
+	}
+	validateRef := func(ref *binary.TypeRef) error {
+		if ref == nil || ref.Primitive != "" {
+			return nil
+		}
+		if ref.TypeIndex == nil {
+			return fmt.Errorf("type reference has neither primitive nor index")
+		}
+		idx := *ref.TypeIndex
+		if visiting[idx] {
+			return fmt.Errorf("canonical ABI type cycle through type index %d", idx)
+		}
+		if resolve == nil {
+			return fmt.Errorf("type index %d requires resolver", idx)
+		}
+		resolved := resolve(idx)
+		if resolved == nil {
+			return fmt.Errorf("type index %d resolved to nil", idx)
+		}
+		visiting[idx] = true
+		err := validateLayoutDesc(resolved, resolve, depth+1, visiting)
+		delete(visiting, idx)
+		return err
+	}
+
+	switch desc := t.(type) {
+	case binary.RecordDesc:
+		for i := range desc.Fields {
+			if err := validateRef(&desc.Fields[i].Type); err != nil {
+				return fmt.Errorf("record field %q: %w", desc.Fields[i].Name, err)
+			}
+		}
+	case binary.VariantDesc:
+		for i := range desc.Cases {
+			if desc.Cases[i].Type != nil {
+				if err := validateRef(desc.Cases[i].Type); err != nil {
+					return fmt.Errorf("variant case %q: %w", desc.Cases[i].Name, err)
+				}
+			}
+		}
+	case binary.TupleDesc:
+		for i := range desc.Elements {
+			if err := validateRef(&desc.Elements[i]); err != nil {
+				return fmt.Errorf("tuple element %d: %w", i, err)
+			}
+		}
+	case binary.OptionDesc:
+		return validateRef(&desc.Element)
+	case binary.ResultDesc:
+		if desc.Ok != nil {
+			if err := validateRef(desc.Ok); err != nil {
+				return fmt.Errorf("result ok: %w", err)
+			}
+		}
+		if desc.Err != nil {
+			return validateRef(desc.Err)
+		}
+	}
+	return nil
+}
+
 // Align rounds offset up to the nearest multiple of alignment. If no aligned
 // memory32 offset can represent the result, it returns MaxUint32; production
 // layout and memory operations use checkedAlign so the condition is surfaced
@@ -51,6 +121,13 @@ func checkedAdd(a, b uint32) (uint32, error) {
 // Alignment computes the byte alignment requirement for a type.
 // This mirrors the canonical ABI alignment() function.
 func Alignment(t binary.TypeDesc, resolve Resolver) (uint32, error) {
+	if err := validateLayoutType(t, resolve); err != nil {
+		return 0, err
+	}
+	return alignmentUnchecked(t, resolve)
+}
+
+func alignmentUnchecked(t binary.TypeDesc, resolve Resolver) (uint32, error) {
 	switch desc := t.(type) {
 	// Primitives
 	case binary.PrimitiveDesc:
@@ -94,6 +171,13 @@ func Alignment(t binary.TypeDesc, resolve Resolver) (uint32, error) {
 // Size computes the number of bytes occupied by a value of the given type.
 // This mirrors the canonical ABI elem_size() function.
 func Size(t binary.TypeDesc, resolve Resolver) (uint32, error) {
+	if err := validateLayoutType(t, resolve); err != nil {
+		return 0, err
+	}
+	return sizeUnchecked(t, resolve)
+}
+
+func sizeUnchecked(t binary.TypeDesc, resolve Resolver) (uint32, error) {
 	switch desc := t.(type) {
 	// Primitives
 	case binary.PrimitiveDesc:
@@ -159,7 +243,7 @@ func MaxCaseAlignment(cases []binary.VariantCase, resolve Resolver) (uint32, err
 			if err != nil {
 				return 0, err
 			}
-			align, err := Alignment(t, resolve)
+			align, err := alignmentUnchecked(t, resolve)
 			if err != nil {
 				return 0, err
 			}
@@ -232,7 +316,7 @@ func alignmentRecord(desc binary.RecordDesc, resolve Resolver) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		align, err := Alignment(ft, resolve)
+		align, err := alignmentUnchecked(ft, resolve)
 		if err != nil {
 			return 0, err
 		}
@@ -266,7 +350,7 @@ func alignmentTuple(desc binary.TupleDesc, resolve Resolver) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		align, err := Alignment(et, resolve)
+		align, err := alignmentUnchecked(et, resolve)
 		if err != nil {
 			return 0, err
 		}
@@ -309,7 +393,7 @@ func alignmentOption(desc binary.OptionDesc, resolve Resolver) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	elemAlign, err := Alignment(elemT, resolve)
+	elemAlign, err := alignmentUnchecked(elemT, resolve)
 	if err != nil {
 		return 0, err
 	}
@@ -328,7 +412,7 @@ func alignmentResult(desc binary.ResultDesc, resolve Resolver) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		okAlign, err := Alignment(okT, resolve)
+		okAlign, err := alignmentUnchecked(okT, resolve)
 		if err != nil {
 			return 0, err
 		}
@@ -341,7 +425,7 @@ func alignmentResult(desc binary.ResultDesc, resolve Resolver) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		errAlign, err := Alignment(errT, resolve)
+		errAlign, err := alignmentUnchecked(errT, resolve)
 		if err != nil {
 			return 0, err
 		}
@@ -372,7 +456,7 @@ func sizeRecord(desc binary.RecordDesc, resolve Resolver) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		align, err := Alignment(ft, resolve)
+		align, err := alignmentUnchecked(ft, resolve)
 		if err != nil {
 			return 0, err
 		}
@@ -380,7 +464,7 @@ func sizeRecord(desc binary.RecordDesc, resolve Resolver) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		size, err := Size(ft, resolve)
+		size, err := sizeUnchecked(ft, resolve)
 		if err != nil {
 			return 0, err
 		}
@@ -421,7 +505,7 @@ func sizeVariant(desc binary.VariantDesc, resolve Resolver) (uint32, error) {
 			if err != nil {
 				return 0, err
 			}
-			cSize, err := Size(ct, resolve)
+			cSize, err := sizeUnchecked(ct, resolve)
 			if err != nil {
 				return 0, err
 			}
@@ -450,7 +534,7 @@ func sizeTuple(desc binary.TupleDesc, resolve Resolver) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		align, err := Alignment(et, resolve)
+		align, err := alignmentUnchecked(et, resolve)
 		if err != nil {
 			return 0, err
 		}
@@ -458,7 +542,7 @@ func sizeTuple(desc binary.TupleDesc, resolve Resolver) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		size, err := Size(et, resolve)
+		size, err := sizeUnchecked(et, resolve)
 		if err != nil {
 			return 0, err
 		}
@@ -524,11 +608,11 @@ func sizeOption(desc binary.OptionDesc, resolve Resolver) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	elemSize, err := Size(elemT, resolve)
+	elemSize, err := sizeUnchecked(elemT, resolve)
 	if err != nil {
 		return 0, err
 	}
-	elemAlign, err := Alignment(elemT, resolve)
+	elemAlign, err := alignmentUnchecked(elemT, resolve)
 	if err != nil {
 		return 0, err
 	}
@@ -561,11 +645,11 @@ func sizeResult(desc binary.ResultDesc, resolve Resolver) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		okSize, err := Size(okT, resolve)
+		okSize, err := sizeUnchecked(okT, resolve)
 		if err != nil {
 			return 0, err
 		}
-		okAlign, err := Alignment(okT, resolve)
+		okAlign, err := alignmentUnchecked(okT, resolve)
 		if err != nil {
 			return 0, err
 		}
@@ -581,11 +665,11 @@ func sizeResult(desc binary.ResultDesc, resolve Resolver) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		errSize, err := Size(errT, resolve)
+		errSize, err := sizeUnchecked(errT, resolve)
 		if err != nil {
 			return 0, err
 		}
-		errAlign, err := Alignment(errT, resolve)
+		errAlign, err := alignmentUnchecked(errT, resolve)
 		if err != nil {
 			return 0, err
 		}
