@@ -308,6 +308,9 @@ func instantiateGraph(ctx context.Context, r wazy.Runtime, comp *binary.Componen
 	var closers []api.Module
 	closeAll := func() {
 		for i := len(closers) - 1; i >= 0; i-- {
+			api.CloseModuleInstance(ctx, closers[i]) //nolint:errcheck // best-effort cleanup on an error path
+		}
+		for i := len(closers) - 1; i >= 0; i-- {
 			closers[i].Close(ctx) //nolint:errcheck // best-effort cleanup on an error path
 		}
 	}

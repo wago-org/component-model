@@ -2150,6 +2150,14 @@ func (in *Instance) Close(ctx context.Context) error {
 			firstErr = err
 		}
 	}
+	// Component adapters deliberately break circular dependencies with shared
+	// tables and host funcrefs. Close every core instance owned here first so
+	// those cycles detach, then release host funcref owners and compiled modules.
+	for i := len(in.closers) - 1; i >= 0; i-- {
+		if err := api.CloseModuleInstance(ctx, in.closers[i]); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 	for i := len(in.closers) - 1; i >= 0; i-- {
 		if err := in.closers[i].Close(ctx); err != nil && firstErr == nil {
 			firstErr = err
