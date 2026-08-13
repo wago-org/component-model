@@ -488,18 +488,21 @@ func buildAsyncHostWrapper(in *Instance, iface, funcName string, hi *hostImport,
 
 		ac := &st.ac
 		ac.in, ac.st = in, st
-		ac.inCall.Store(true)
 		// Bracket the actual Go call -- see buildHostWrapper's identical
 		// comment (host_import.go): this is what lets a Write/Read/Set/Get
 		// called synchronously from inside an AsyncHostFunc invocation pass
 		// requireSchedulable (stream_host.go).
-		in.inHostCall++
-		ferr := hi.asyncFn(ctx, args, ac)
-		in.inHostCall--
+		var ferr error
+		func() {
+			ac.inCall.Store(true)
+			defer ac.inCall.Store(false)
+			in.inHostCall++
+			defer func() { in.inHostCall-- }()
+			ferr = hi.asyncFn(ctx, args, ac)
+		}()
 		if ferr != nil {
 			panic(fmt.Errorf("component/instance: async import %q %q: %w", iface, funcName, ferr))
 		}
-		ac.inCall.Store(false)
 
 		if st.resolved() {
 			// Immediate fast path (reference: "if subtask.resolved(): ...

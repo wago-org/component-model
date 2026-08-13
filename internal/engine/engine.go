@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	goruntime "runtime"
 
 	"github.com/wago-org/component-model/internal/engine/expctxkeys"
 	core "github.com/wago-org/wago"
@@ -243,6 +244,21 @@ func (r *runtimeAdapter) instantiateModule(ctx context.Context, c CompiledModule
 			var host core.HostFunc
 			if hf, ok := fn.(*hostFunction); ok {
 				host = core.HostFunc(func(caller core.HostModule, params, results []uint64) {
+					defer func() {
+						if recovered := recover(); recovered != nil {
+							switch recovered.(type) {
+							case core.HostTrap, *core.HostTrap:
+								panic(recovered)
+							}
+							if _, bug := recovered.(goruntime.Error); bug {
+								panic(recovered)
+							}
+							if err, ok := recovered.(error); ok {
+								panic(core.HostTrap{Err: err})
+							}
+							panic(recovered)
+						}
+					}()
 					stack := make([]uint64, max(len(params), len(results)))
 					copy(stack, params)
 					callCtx := context.WithValue(ctx, activeCallerKey{}, caller)
@@ -389,8 +405,7 @@ func (m *module) ExportedGlobal(name string) Global {
 	return &global{g: g}
 }
 func (m *module) Close(ctx context.Context) error {
-	err := m.owned.Close()
-	m.owned = nil
+	err := CloseModuleInstance(ctx, m)
 	for i := len(m.hostRefs) - 1; i >= 0; i-- {
 		err = errors.Join(err, m.hostRefs[i].Close())
 	}
@@ -399,6 +414,20 @@ func (m *module) Close(ctx context.Context) error {
 		err = errors.Join(err, m.compiled.Close(cleanupContext(ctx)))
 		m.compiled = nil
 	}
+	return err
+}
+
+// CloseModuleInstance closes only a module's core instance, leaving the host
+// funcref owners created for its imports alive. Component adapter graphs can
+// contain reference cycles, so every core instance in the graph must detach
+// before any of those owners are released.
+func CloseModuleInstance(_ context.Context, mod Module) error {
+	m, ok := mod.(*module)
+	if !ok || m == nil || m.owned == nil {
+		return nil
+	}
+	err := m.owned.Close()
+	m.owned = nil
 	return err
 }
 

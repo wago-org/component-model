@@ -714,18 +714,18 @@ func buildHostWrapper(in *Instance, iface, funcName string, hi *hostImport, reso
 		// (stream_host.go) two "provably on the driving goroutine" cases --
 		// a StreamWriter/StreamReader/FutureWriter/FutureReader call made
 		// synchronously from inside a sync host import is legal.
-		if in != nil {
-			in.inHostCall++
-		}
 		var results []abi.Value
-		if blockingCaller != nil {
-			results, err = startDelegatedFromBlocker(ctx, blockingCaller, hi.asyncTarget, args)
-		} else {
-			results, err = hi.fn(ctx, args)
-		}
-		if in != nil {
-			in.inHostCall--
-		}
+		func() {
+			if in != nil {
+				in.inHostCall++
+				defer func() { in.inHostCall-- }()
+			}
+			if blockingCaller != nil {
+				results, err = startDelegatedFromBlocker(ctx, blockingCaller, hi.asyncTarget, args)
+			} else {
+				results, err = hi.fn(ctx, args)
+			}
+		}()
 		if err != nil {
 			panic(fmt.Errorf("component/instance: host import %q %q: %w", iface, funcName, err))
 		}

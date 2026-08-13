@@ -3,6 +3,7 @@ package instance
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -122,6 +123,110 @@ func TestSynchronousInvocationsAreSerialized(t *testing.T) {
 	if got := maximum.Load(); got != 1 {
 		t.Fatalf("maximum concurrent calls = %d, want 1", got)
 	}
+}
+
+func TestHostImportErrorRestoresExecutionMarkers(t *testing.T) {
+	wantErr := errors.New("host failed")
+	in := &Instance{resources: newHandleTable()}
+	hi := &hostImport{fn: func(context.Context, []abi.Value) ([]abi.Value, error) {
+		return nil, wantErr
+	}}
+	fn, _, _, err := buildHostWrapper(in, "test:pkg/host", "fail", hi, in.resources, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertPanicsWith(t, wantErr.Error(), func() {
+		fn.Call(context.Background(), &testModule{}, nil)
+	})
+	if got := in.inHostCall; got != 0 {
+		t.Fatalf("inHostCall = %d after host error, want 0", got)
+	}
+}
+
+func TestHostImportPanicRestoresExecutionMarkers(t *testing.T) {
+	in := &Instance{resources: newHandleTable()}
+	hi := &hostImport{fn: func(context.Context, []abi.Value) ([]abi.Value, error) {
+		panic("host panicked")
+	}}
+	fn, _, _, err := buildHostWrapper(in, "test:pkg/host", "panic", hi, in.resources, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertPanicsWith(t, "host panicked", func() {
+		fn.Call(context.Background(), &testModule{}, nil)
+	})
+	if got := in.inHostCall; got != 0 {
+		t.Fatalf("inHostCall = %d after host panic, want 0", got)
+	}
+}
+
+func TestAsyncHostImportErrorRestoresExecutionMarkers(t *testing.T) {
+	wantErr := errors.New("async host failed")
+	in := &Instance{resources: newHandleTable(), sched: &sched{}}
+	var call *AsyncCall
+	hi := &hostImport{asyncFn: func(_ context.Context, _ []abi.Value, ac *AsyncCall) error {
+		call = ac
+		return wantErr
+	}}
+	fn, _, _, err := buildAsyncHostWrapper(in, "test:pkg/host", "fail", hi, in.resources, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertPanicsWith(t, wantErr.Error(), func() {
+		fn.Call(context.Background(), &testModule{}, make([]uint64, 1))
+	})
+	if got := in.inHostCall; got != 0 {
+		t.Fatalf("inHostCall = %d after async host error, want 0", got)
+	}
+	if call == nil {
+		t.Fatal("async host call was not invoked")
+	}
+	if call.inCall.Load() {
+		t.Fatal("AsyncCall remained marked in-call after async host error")
+	}
+}
+
+func TestAsyncHostImportPanicRestoresExecutionMarkers(t *testing.T) {
+	in := &Instance{resources: newHandleTable(), sched: &sched{}}
+	var call *AsyncCall
+	hi := &hostImport{asyncFn: func(_ context.Context, _ []abi.Value, ac *AsyncCall) error {
+		call = ac
+		panic("async host panicked")
+	}}
+	fn, _, _, err := buildAsyncHostWrapper(in, "test:pkg/host", "panic", hi, in.resources, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertPanicsWith(t, "async host panicked", func() {
+		fn.Call(context.Background(), &testModule{}, make([]uint64, 1))
+	})
+	if got := in.inHostCall; got != 0 {
+		t.Fatalf("inHostCall = %d after async host panic, want 0", got)
+	}
+	if call == nil {
+		t.Fatal("async host call was not invoked")
+	}
+	if call.inCall.Load() {
+		t.Fatal("AsyncCall remained marked in-call after async host panic")
+	}
+}
+
+func assertPanicsWith(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		got := recover()
+		if got == nil {
+			t.Fatalf("did not panic; want panic containing %q", want)
+		}
+		if !strings.Contains(fmt.Sprint(got), want) {
+			t.Fatalf("panic = %v, want text containing %q", got, want)
+		}
+	}()
+	fn()
 }
 
 func TestHandleTableCloseDrainsHostResources(t *testing.T) {

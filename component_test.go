@@ -12,6 +12,7 @@ import (
 	"time"
 
 	component "github.com/wago-org/component-model"
+	"github.com/wago-org/component-model/internal/testfixtures"
 	componentregister "github.com/wago-org/component-model/register"
 	"github.com/wago-org/wago"
 	wagoplugin "github.com/wago-org/wago/plugin"
@@ -131,6 +132,17 @@ func TestPluginExecutesComponentInsideContractLease(t *testing.T) {
 	}
 	if _, err := escaped.CallExport(context.Background(), "component:adder/calc", "add", uint32(1), uint32(1)); err == nil {
 		t.Fatal("component instance escaped its WithInstance callback")
+	}
+}
+
+func TestPluginClosesRealRustAdapterGraph(t *testing.T) {
+	rt, ref := loadService(t, nil)
+	defer rt.Close()
+
+	if err := ref.With(func(service component.Service) error {
+		return service.WithInstance(context.Background(), testfixtures.RealHello, func(*component.Instance) error { return nil })
+	}); err != nil {
+		t.Fatalf("close real Rust wasm32-wasip2 adapter graph: %v", err)
 	}
 }
 
