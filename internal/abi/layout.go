@@ -17,12 +17,35 @@ import (
 // Used to follow TypeRef indices during layout computation.
 type Resolver func(idx uint32) binary.TypeDesc
 
-// Align rounds offset up to the nearest multiple of alignment.
+// Align rounds offset up to the nearest multiple of alignment. If no aligned
+// memory32 offset can represent the result, it returns MaxUint32; production
+// layout and memory operations use checkedAlign so the condition is surfaced
+// as an error instead of relying on this compatibility helper's sentinel.
 func Align(offset, alignment uint32) uint32 {
-	if alignment == 0 {
-		return offset
+	aligned, err := checkedAlign(offset, alignment)
+	if err != nil {
+		return math.MaxUint32
 	}
-	return ((offset + alignment - 1) / alignment) * alignment
+	return aligned
+}
+
+func checkedAlign(offset, alignment uint32) (uint32, error) {
+	if alignment == 0 {
+		return offset, nil
+	}
+	sum := uint64(offset) + uint64(alignment) - 1
+	if sum > math.MaxUint32 {
+		return 0, fmt.Errorf("canonical ABI layout overflow aligning offset %d to %d", offset, alignment)
+	}
+	return uint32(sum/uint64(alignment)) * alignment, nil
+}
+
+func checkedAdd(a, b uint32) (uint32, error) {
+	sum := uint64(a) + uint64(b)
+	if sum > math.MaxUint32 {
+		return 0, fmt.Errorf("canonical ABI layout overflow adding %d and %d", a, b)
+	}
+	return uint32(sum), nil
 }
 
 // Alignment computes the byte alignment requirement for a type.
@@ -353,19 +376,25 @@ func sizeRecord(desc binary.RecordDesc, resolve Resolver) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		offset = Align(offset, align)
+		offset, err = checkedAlign(offset, align)
+		if err != nil {
+			return 0, err
+		}
 		size, err := Size(ft, resolve)
 		if err != nil {
 			return 0, err
 		}
-		offset += size
+		offset, err = checkedAdd(offset, size)
+		if err != nil {
+			return 0, err
+		}
 	}
 	// Align final size to record alignment
 	recordAlign, err := alignmentRecord(desc, resolve)
 	if err != nil {
 		return 0, err
 	}
-	return Align(offset, recordAlign), nil
+	return checkedAlign(offset, recordAlign)
 }
 
 func sizeVariant(desc binary.VariantDesc, resolve Resolver) (uint32, error) {
@@ -380,7 +409,10 @@ func sizeVariant(desc binary.VariantDesc, resolve Resolver) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	offset = Align(offset, maxCaseAlign)
+	offset, err = checkedAlign(offset, maxCaseAlign)
+	if err != nil {
+		return 0, err
+	}
 
 	maxCaseSize := uint32(0)
 	for _, c := range desc.Cases {
@@ -398,14 +430,17 @@ func sizeVariant(desc binary.VariantDesc, resolve Resolver) (uint32, error) {
 			}
 		}
 	}
-	offset += maxCaseSize
+	offset, err = checkedAdd(offset, maxCaseSize)
+	if err != nil {
+		return 0, err
+	}
 
 	// Align final size to variant alignment
 	variantAlign, err := alignmentVariant(desc, resolve)
 	if err != nil {
 		return 0, err
 	}
-	return Align(offset, variantAlign), nil
+	return checkedAlign(offset, variantAlign)
 }
 
 func sizeTuple(desc binary.TupleDesc, resolve Resolver) (uint32, error) {
@@ -419,19 +454,25 @@ func sizeTuple(desc binary.TupleDesc, resolve Resolver) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		offset = Align(offset, align)
+		offset, err = checkedAlign(offset, align)
+		if err != nil {
+			return 0, err
+		}
 		size, err := Size(et, resolve)
 		if err != nil {
 			return 0, err
 		}
-		offset += size
+		offset, err = checkedAdd(offset, size)
+		if err != nil {
+			return 0, err
+		}
 	}
 	// Align final size to tuple alignment
 	tupleAlign, err := alignmentTuple(desc, resolve)
 	if err != nil {
 		return 0, err
 	}
-	return Align(offset, tupleAlign), nil
+	return checkedAlign(offset, tupleAlign)
 }
 
 func sizeFlags(desc binary.FlagsDesc) (uint32, error) {
@@ -495,12 +536,18 @@ func sizeOption(desc binary.OptionDesc, resolve Resolver) (uint32, error) {
 
 	// Size = discriminant + padding + max(element)
 	offset := uint32(1)
-	offset = Align(offset, elemAlign)
-	offset += elemSize
+	offset, err = checkedAlign(offset, elemAlign)
+	if err != nil {
+		return 0, err
+	}
+	offset, err = checkedAdd(offset, elemSize)
+	if err != nil {
+		return 0, err
+	}
 
 	// Align to variant alignment
 	maxAlign := max(discAlign, elemAlign)
-	return Align(offset, maxAlign), nil
+	return checkedAlign(offset, maxAlign)
 }
 
 func sizeResult(desc binary.ResultDesc, resolve Resolver) (uint32, error) {
@@ -550,13 +597,19 @@ func sizeResult(desc binary.ResultDesc, resolve Resolver) (uint32, error) {
 		}
 	}
 
-	offset = Align(offset, maxPayloadAlign)
-	offset += maxPayloadSize
+	offset, err := checkedAlign(offset, maxPayloadAlign)
+	if err != nil {
+		return 0, err
+	}
+	offset, err = checkedAdd(offset, maxPayloadSize)
+	if err != nil {
+		return 0, err
+	}
 
 	// Align to result alignment
 	discAlign, _ := alignmentPrimitive("u8")
 	maxAlign := max(discAlign, maxPayloadAlign)
-	return Align(offset, maxAlign), nil
+	return checkedAlign(offset, maxAlign)
 }
 
 // ------- Helper: resolveType -------

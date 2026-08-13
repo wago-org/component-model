@@ -85,6 +85,57 @@ func TestReallocTrapPoisonsInstance(t *testing.T) {
 	}
 }
 
+func TestGuestResultLiftTrapPoisonsInstance(t *testing.T) {
+	main := &testFunction{
+		def: testFuncDef{results: []api.ValueType{api.ValueTypeI32}},
+		call: func(_ context.Context, stack []uint64) error {
+			stack[0] = 0xd800 // invalid Unicode scalar value
+			return nil
+		},
+	}
+	mod := &testModule{funcs: map[string]api.Function{"run": main}}
+	be := &boundExport{
+		mod:      mod,
+		funcName: "run",
+		fd: binary.FuncDesc{Results: binary.FuncResults{Named: []binary.FuncResult{{
+			Name: "value",
+			Type: binary.TypeRef{Primitive: "char"},
+		}}}},
+	}
+	finalizeBoundExport(be, nil, nil, nil, 0)
+	in := &Instance{resources: newHandleTable()}
+	if _, err := in.invoke(context.Background(), be, "run", nil); err == nil {
+		t.Fatal("expected invalid guest result to trap")
+	}
+	if _, err := in.invoke(context.Background(), be, "later", nil); err == nil || !strings.Contains(err.Error(), "cannot enter component instance") {
+		t.Fatalf("second call error = %v, want poisoned-instance error", err)
+	}
+}
+
+func TestStaticResultShapeErrorDoesNotPoisonInstance(t *testing.T) {
+	main := &testFunction{}
+	mod := &testModule{funcs: map[string]api.Function{"run": main}}
+	bad := &boundExport{
+		mod:      mod,
+		funcName: "run",
+		fd: binary.FuncDesc{Results: binary.FuncResults{Named: []binary.FuncResult{{
+			Name: "value",
+			Type: binary.TypeRef{Primitive: "char"},
+		}}}},
+	}
+	finalizeBoundExport(bad, nil, nil, nil, 0)
+	in := &Instance{resources: newHandleTable()}
+	if _, err := in.invoke(context.Background(), bad, "bad", nil); err == nil {
+		t.Fatal("expected static result-shape error")
+	}
+
+	good := &boundExport{mod: mod, funcName: "run"}
+	finalizeBoundExport(good, nil, nil, nil, 0)
+	if _, err := in.invoke(context.Background(), good, "good", nil); err != nil {
+		t.Fatalf("later valid call failed after static result error: %v", err)
+	}
+}
+
 func TestSynchronousInvocationsAreSerialized(t *testing.T) {
 	started := make(chan struct{}, 2)
 	release := make(chan struct{}, 2)

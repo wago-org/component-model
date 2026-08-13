@@ -1736,10 +1736,26 @@ func wrapUnreachableTrap(err error) error {
 	return err
 }
 
+// guestResultTrap marks a canonical-ABI failure caused by values the guest
+// returned after its core function ran. Static binding/configuration errors
+// remain ordinary errors so they do not lock down an otherwise healthy
+// instance.
+type guestResultTrap struct{ err error }
+
+func (e guestResultTrap) Error() string { return e.err.Error() }
+func (e guestResultTrap) Unwrap() error { return e.err }
+
+func markGuestResultTrap(err error) error {
+	if err == nil {
+		return nil
+	}
+	return guestResultTrap{err: err}
+}
+
 // invokeEntered is invoke's actual call body, split out purely for
-// readability at the poisoning boundary (see the two explicit in.poisoned =
-// true sites below, at the ONLY two points this export's own guest code
-// actually runs: be.coreFn.CallWithStack and be.postReturnFn.CallWithStack).
+// readability at the poisoning boundary. Core-call and post-return traps poison
+// directly; guest-caused canonical-ABI result traps are tagged by liftResult
+// and poison after guest execution has completed.
 //
 // Deliberately NOT poisoning on every error here (an earlier version used a
 // single defer to poison on ANY non-nil err, which is closer to the
@@ -1750,12 +1766,10 @@ func wrapUnreachableTrap(err error) error {
 // core code ever runs), and then keeps calling OTHER, still-valid handles on
 // the SAME instance -- broad poisoning permanently broke every later call.
 // A host-side ABI/argument validation failure (lowerParams, resolveArgHandles,
-// the coreArgs-count static check, liftResult) never actually enters guest
-// code, so -- unlike a real trap escaping a CallWithStack -- it must not
-// poison; matches builtin-trap-poisons-instance's own two poisoning cases
-// (an `unreachable` and a busy-stream host-builtin trap), both of which
-// surface AS be.coreFn.CallWithStack failing, so this narrower rule still
-// covers everything that suite (or the spec) requires here.
+// the coreArgs-count static check, and liftResult's static shape checks) must
+// not poison. liftResult separately tags failures caused by guest-returned
+// memory, discriminants, Unicode scalars, and handles, because guest code has
+// already run by then and those are canonical-ABI traps.
 func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportName string, args []abi.Value) ([]abi.Value, error) {
 	if in.syncTaskNeeded {
 		// The reference's canon_lift constructs a Task for EVERY call,
@@ -1841,6 +1855,10 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 	results, err := in.liftResult(be, rawResults, mem, memAvailable, exportName)
 	if err != nil {
 		putUint64Slice(stackPtr)
+		var trap guestResultTrap
+		if errors.As(err, &trap) {
+			in.poisoned.Store(true)
+		}
 		return nil, err
 	}
 
@@ -1985,7 +2003,7 @@ func (in *Instance) liftResult(be *boundExport, rawResults []uint64, mem []byte,
 		}
 		val, err := abi.Load(mem, uint32(rawResults[0]), rt, in.resolve)
 		if err != nil {
-			return nil, fmt.Errorf("component/instance: export %q result: load spilled result: %w", exportName, err)
+			return nil, markGuestResultTrap(fmt.Errorf("component/instance: export %q result: load spilled result: %w", exportName, err))
 		}
 		if err := in.validateLiftedStreamFutureResult(rt, val, exportName); err != nil {
 			return nil, err
@@ -2017,7 +2035,7 @@ func (in *Instance) liftResult(be *boundExport, rawResults []uint64, mem []byte,
 	val, err := be.resultStep.Lift(coreResults, mem)
 	putCoreValueSlice(coreResultsPtr)
 	if err != nil {
-		return nil, fmt.Errorf("component/instance: export %q result: lift: %w", exportName, err)
+		return nil, markGuestResultTrap(fmt.Errorf("component/instance: export %q result: lift: %w", exportName, err))
 	}
 	if err := in.validateLiftedStreamFutureResult(rt, val, exportName); err != nil {
 		return nil, err
@@ -2054,7 +2072,7 @@ func (in *Instance) validateLiftedStreamFutureResult(rt binary.TypeDesc, val abi
 			elemDesc = ed
 		}
 		if _, err := peekReadableStreamEnd(in, in.resources, elemDesc, h); err != nil {
-			return fmt.Errorf("component/instance: export %q result: %w", exportName, err)
+			return markGuestResultTrap(fmt.Errorf("component/instance: export %q result: %w", exportName, err))
 		}
 	case binary.FutureDesc:
 		h, ok := val.(uint32)
@@ -2070,7 +2088,7 @@ func (in *Instance) validateLiftedStreamFutureResult(rt binary.TypeDesc, val abi
 			elemDesc = ed
 		}
 		if _, err := peekReadableFutureEnd(in, in.resources, elemDesc, h); err != nil {
-			return fmt.Errorf("component/instance: export %q result: %w", exportName, err)
+			return markGuestResultTrap(fmt.Errorf("component/instance: export %q result: %w", exportName, err))
 		}
 	}
 	return nil
