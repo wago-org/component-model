@@ -139,9 +139,9 @@ func putCoreValueSlice(p *[]abi.CoreValue) {
 type Instance struct {
 	resolve abi.Resolver
 
-	// syncCallMu serializes top-level synchronous calls. Re-entry in the same
-	// call chain is recognized through syncCallContext so guest -> host -> guest
-	// callbacks do not recursively acquire the gate.
+	// syncCallMu is the instance execution lease. It serializes every top-level
+	// Call and is held across the full lifetime of a PendingCall. Re-entry in
+	// the same call chain is recognized through syncCallContext.
 	syncCallMu sync.Mutex
 
 	// --- CallAsync (host-side non-blocking calls, callasync.go) ---
@@ -385,6 +385,9 @@ type Instance struct {
 	// import in flight.
 	inHostCall int
 }
+
+func (in *Instance) claimAsyncExecution() bool { return in.syncCallMu.TryLock() }
+func (in *Instance) releaseAsyncExecution()    { in.syncCallMu.Unlock() }
 
 // CoreModuleCount returns the number of embedded core modules (real,
 // non-synthetic core wasm binaries from the component's CoreModules section)
@@ -1684,16 +1687,16 @@ func (in *Instance) invoke(ctx context.Context, be *boundExport, exportName stri
 	if be.home != nil {
 		target = be.home
 	}
+	if !syncCallContains(ctx, target) {
+		target.syncCallMu.Lock()
+		defer target.syncCallMu.Unlock()
+		ctx = context.WithValue(ctx, syncCallContextKey{}, &syncCallContext{instance: target, parent: syncCallFrom(ctx)})
+	}
 	if be.asyncCallback {
 		return target.invokeAsyncCallback(ctx, be, exportName, args)
 	}
 	if be.stackful {
 		return target.invokeStackful(ctx, be, exportName, args)
-	}
-	if !syncCallContains(ctx, target) {
-		target.syncCallMu.Lock()
-		defer target.syncCallMu.Unlock()
-		ctx = context.WithValue(ctx, syncCallContextKey{}, &syncCallContext{instance: target, parent: syncCallFrom(ctx)})
 	}
 	// target.poisoned mirrors the async paths' own check (async_lift.go) --
 	// a sync export gets no enterRun/leaveRun bracketing (mayEnter never
@@ -2173,14 +2176,16 @@ func safeExportedFunction(mod api.Module, name string) (fn api.Function) {
 // order of instantiation). It does not close the Runtime passed to
 // Instantiate, which the caller owns.
 func (in *Instance) Close(ctx context.Context) error {
-	in.syncCallMu.Lock()
-	defer in.syncCallMu.Unlock()
 	in.amu.Lock()
 	p := in.pending
 	in.amu.Unlock()
 	if p != nil {
-		in.finishAsync(p, nil, errCallAsyncCancelled)
+		if err := p.Cancel(ctx); err != nil {
+			return err
+		}
 	}
+	in.syncCallMu.Lock()
+	defer in.syncCallMu.Unlock()
 	// Reap every parked goroutine (stackful task or promoted callback-task
 	// segment) in the shared scheduler BEFORE closing core modules
 	// (docs/component-model-async-stackful-design.md §8, Feature 1

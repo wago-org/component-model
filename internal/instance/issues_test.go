@@ -186,6 +186,165 @@ func TestNonUTF8CanonicalEncodingIsRejected(t *testing.T) {
 	}
 }
 
+func TestAsyncExecutionLeaseExcludesOtherCalls(t *testing.T) {
+	in := &Instance{}
+	if !in.claimAsyncExecution() {
+		t.Fatal("first async execution lease was rejected")
+	}
+	if in.claimAsyncExecution() {
+		t.Fatal("second async execution lease was accepted")
+	}
+	if in.syncCallMu.TryLock() {
+		in.syncCallMu.Unlock()
+		t.Fatal("synchronous execution overlapped async lease")
+	}
+	in.releaseAsyncExecution()
+	if !in.syncCallMu.TryLock() {
+		t.Fatal("execution lease remained held after release")
+	}
+	in.syncCallMu.Unlock()
+}
+
+func TestCallOfAsyncExportWaitsForExecutionLease(t *testing.T) {
+	in := &Instance{mayEnter: true}
+	if !in.claimAsyncExecution() {
+		t.Fatal("could not claim async execution lease")
+	}
+	be := &boundExport{asyncCallback: true, funcName: "run"}
+	done := make(chan error, 1)
+	go func() {
+		_, err := in.invoke(context.Background(), be, "run", nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Call returned while async lease was held: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	in.releaseAsyncExecution()
+	if err := <-done; err == nil {
+		t.Fatal("Call unexpectedly succeeded")
+	}
+}
+
+func TestCallAsyncCompletionQueuesEvenBeforeHostCallbackReturns(t *testing.T) {
+	in := &Instance{sched: &sched{}}
+	p := &PendingCall{in: in, done: make(chan struct{})}
+	in.amu.Lock()
+	in.pending = p
+	in.amu.Unlock()
+	in.asyncActive.Store(true)
+	st := newSubtask()
+	st.resolveFn = func([]abi.Value) error {
+		t.Fatal("completion applied off-driver")
+		return nil
+	}
+	ac := &st.ac
+	ac.in, ac.st = in, st
+	ac.inCall.Store(true)
+	if err := ac.Resolve(nil); err != nil {
+		t.Fatal(err)
+	}
+	in.amu.Lock()
+	queued := len(in.mailbox)
+	in.amu.Unlock()
+	if queued != 1 {
+		t.Fatalf("queued completions = %d, want 1", queued)
+	}
+}
+
+func TestLateAsyncCompletionReturnsClosedError(t *testing.T) {
+	in := &Instance{sched: &sched{}}
+	p := &PendingCall{in: in, done: make(chan struct{})}
+	st := newSubtask()
+	ac := &st.ac
+	ac.in, ac.st = in, st
+	p.calls = append(p.calls, ac)
+	in.pending = p
+	in.asyncActive.Store(true)
+	in.finishAsync(p, nil, errCallAsyncCancelled)
+	if err := ac.Resolve(nil); !errors.Is(err, errAsyncCallClosed) {
+		t.Fatalf("late Resolve error = %v, want ErrCallClosed", err)
+	}
+}
+
+func TestConcurrentAsyncResolvesAreOneShot(t *testing.T) {
+	in := &Instance{sched: &sched{}}
+	p := &PendingCall{in: in, done: make(chan struct{})}
+	in.pending = p
+	in.asyncActive.Store(true)
+	st := newSubtask()
+	ac := &st.ac
+	ac.in, ac.st = in, st
+	errs := make(chan error, 2)
+	start := make(chan struct{})
+	for range 2 {
+		go func() {
+			<-start
+			errs <- ac.Resolve(nil)
+		}()
+	}
+	close(start)
+	var successes, failures int
+	for range 2 {
+		if err := <-errs; err != nil {
+			failures++
+		} else {
+			successes++
+		}
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("Resolve results: %d successes, %d failures; want 1 and 1", successes, failures)
+	}
+}
+
+func TestPendingCallHasSingleDriver(t *testing.T) {
+	in := &Instance{}
+	p := &PendingCall{in: in, done: make(chan struct{})}
+	if err := p.claimDriver(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.claimDriver(); !errors.Is(err, errAsyncDriverActive) {
+		t.Fatalf("second driver claim error = %v, want driver-active error", err)
+	}
+	p.releaseDriver()
+	if err := p.claimDriver(); err != nil {
+		t.Fatalf("driver claim after release: %v", err)
+	}
+	p.releaseDriver()
+}
+
+func TestStalePendingCallCannotClearNewAsyncCall(t *testing.T) {
+	in := &Instance{}
+	old := &PendingCall{in: in, done: make(chan struct{}), closed: true}
+	close(old.done)
+	current := &PendingCall{in: in, done: make(chan struct{})}
+	in.pending = current
+	in.asyncActive.Store(true)
+	in.finishAsync(old, nil, errCallAsyncCancelled)
+	if !in.asyncActive.Load() || in.pending != current {
+		t.Fatal("stale finish changed the current async call")
+	}
+}
+
+func TestCloseCancelsAsyncLeaseBeforeLocking(t *testing.T) {
+	in := &Instance{resources: newHandleTable(), sched: &sched{}}
+	if !in.claimAsyncExecution() {
+		t.Fatal("could not claim async execution lease")
+	}
+	p := &PendingCall{in: in, done: make(chan struct{}), lease: true}
+	in.pending = p
+	in.asyncActive.Store(true)
+	if err := in.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-p.done:
+	default:
+		t.Fatal("Close did not cancel pending call")
+	}
+}
+
 func TestSynchronousInvocationsAreSerialized(t *testing.T) {
 	started := make(chan struct{}, 2)
 	release := make(chan struct{}, 2)
