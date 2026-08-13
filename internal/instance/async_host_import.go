@@ -265,7 +265,7 @@ type AsyncHostFunc func(ctx context.Context, args []abi.Value, call *AsyncCall) 
 // computeCanonHostFunc.
 func WithAsyncImport(iface, name string, fn AsyncHostFunc, params, results []binary.TypeDesc) Option {
 	return func(c *config) {
-		c.imports[mkImportKey(iface, name)] = &hostImport{asyncFn: fn, params: params, results: results}
+		c.registerImport(iface, name, &hostImport{asyncFn: fn, params: params, results: results})
 	}
 }
 
