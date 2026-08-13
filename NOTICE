@@ -11,3 +11,19 @@ from github.com/bytecodealliance/wasmtime at commit
 
 Copyright the Wasmtime authors.
 Licensed under Apache-2.0 WITH LLVM-exception.
+
+The additional Wasmtime WAST regression corpus under
+testdata/conformance/wasmtime/upstream is vendored from
+github.com/bytecodealliance/wasmtime at commit
+e67ea9a663adc718b00389dba2d7b899a17032c0.
+
+Copyright the Wasmtime authors.
+Licensed under Apache-2.0 WITH LLVM-exception.
+
+The reference Component Model WAST suite under testdata/conformance/upstream
+is vendored from github.com/WebAssembly/component-model at commit
+8b5c200fe8ef39d715849d4b9b5e03017c8ab62a. Generated component binaries and
+the test manifest are derived from those sources with wast 256.0.0.
+
+Copyright WebAssembly Community Group participants.
+Licensed under Apache-2.0; see testdata/conformance/upstream/LICENSE-APACHE.
