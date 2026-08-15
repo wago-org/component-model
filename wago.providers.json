@@ -6,7 +6,7 @@
       "definition": {
         "id": "github.com/wago-org/component-model",
         "name": "Wago Component Model",
-        "version": "0.1.0",
+        "version": "0.1.1",
         "description": "WebAssembly Component Model execution and Canonical ABI linking for Wago.",
         "stability": "experimental",
         "compatibility": {
@@ -35,7 +35,7 @@
             "reason": "instantiate and own the bounded core-module graph behind a component instance",
             "scope": {
               "maxInstances": 64,
-              "maxMemoryBytes": 17179869184
+              "maxMemoryBytes": 21474836480
             }
           },
           {
@@ -57,7 +57,7 @@
           }
         ]
       },
-      "definitionDigest": "sha256:3f72634f84e8ffad0b7460f755b56b56c643b4e04f930579db08d41b3dd7083f"
+      "definitionDigest": "sha256:5e75bd21d0cb223de3eb390d68a89c2e575ef2ab3e5b120afd9c803870945cf0"
     }
   ]
 }

@@ -3,6 +3,7 @@ package instance
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/wago-org/component-model/internal/binary"
@@ -43,7 +44,8 @@ import (
 // code it references, stays alive across many Instance lifetimes until the
 // cache itself is closed. Call Close on the CompileCache (typically
 // alongside the Runtime it was built against) once it's no longer needed;
-// after that, every Instance ever built through it is invalid.
+// after that, every Instance ever built through it is invalid and the cache
+// rejects reuse. Close is idempotent and clears decoded/ABI/plan metadata too.
 //
 // # Runtime pairing
 //
@@ -65,6 +67,9 @@ import (
 // than stored, and every caller (winner or loser) still gets back a valid,
 // usable CompiledModule.
 type CompileCache struct {
+	stateMu sync.RWMutex
+	closed  bool
+
 	mu    sync.Mutex
 	byKey map[string]wazy.CompiledModule
 
@@ -87,6 +92,8 @@ type CompileCache struct {
 	planMu sync.Mutex
 	byPlan map[*binary.Component]*graphPlan
 }
+
+var errCompileCacheClosed = errors.New("component/instance: compile cache is closed")
 
 // graphPlan is the cached, per-component output of the graph import-discovery
 // pass: the core-level import signatures every lowered import needs, plus each
@@ -121,6 +128,11 @@ func NewCompileCache() *CompileCache {
 // the lock; a rare miss race recomputes (pure, harmless) and the first stored
 // wins.
 func (c *CompileCache) abiFor(comp *binary.Component, funcIdx uint32, compute func() *boundExportABI) *boundExportABI {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	if c.closed {
+		return compute()
+	}
 	c.abiMu.Lock()
 	if m := c.byABI[comp]; m != nil {
 		if a, ok := m[funcIdx]; ok {
@@ -153,6 +165,11 @@ func (c *CompileCache) abiFor(comp *binary.Component, funcIdx uint32, compute fu
 // abiFor's lock/recheck-on-store shape; a miss race computes at most twice and
 // both results are equivalent (compute is pure over the immutable component).
 func (c *CompileCache) graphPlanFor(comp *binary.Component, compute func() (*graphPlan, error)) (*graphPlan, error) {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	if c.closed {
+		return nil, errCompileCacheClosed
+	}
 	c.planMu.Lock()
 	if p, ok := c.byPlan[comp]; ok {
 		c.planMu.Unlock()
@@ -183,6 +200,11 @@ func (c *CompileCache) graphPlanFor(comp *binary.Component, compute func() (*gra
 // skips re-parsing the component binary (~40% of a cached instantiation's
 // allocations) on every call.
 func (c *CompileCache) getOrDecode(componentBytes []byte) (*binary.Component, error) {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	if c.closed {
+		return nil, errCompileCacheClosed
+	}
 	// The hit path uses the map[string(byteslice)] idiom, which the Go compiler
 	// lowers to a no-copy lookup -- so a cache hit allocates nothing (crucial:
 	// componentBytes can be tens of KB). The full string key is materialized
@@ -212,6 +234,11 @@ func (c *CompileCache) getOrDecode(componentBytes []byte) (*binary.Component, er
 // getOrCompile returns the CompiledModule for coreBytes, compiling via r on
 // a miss and storing the result for future callers. See CompileCache's doc.
 func (c *CompileCache) getOrCompile(ctx context.Context, r wazy.Runtime, coreBytes []byte) (wazy.CompiledModule, error) {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	if c.closed {
+		return nil, errCompileCacheClosed
+	}
 	// Look up with map[string(coreBytes)] -- the compiler elides the []byte->string
 	// copy for a map index expression, so a cache HIT (the steady state) allocates
 	// nothing. The key is only materialized on the miss/store path below, exactly
@@ -247,8 +274,14 @@ func (c *CompileCache) getOrCompile(ctx context.Context, r wazy.Runtime, coreByt
 // underlying compiled code is gone. Safe to call once, typically alongside
 // closing the Runtime this cache was paired with.
 func (c *CompileCache) Close(ctx context.Context) error {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	var firstErr error
 	for k, cm := range c.byKey {
 		if err := cm.Close(ctx); err != nil && firstErr == nil {
@@ -256,6 +289,17 @@ func (c *CompileCache) Close(ctx context.Context) error {
 		}
 		delete(c.byKey, k)
 	}
+	c.mu.Unlock()
+
+	c.decMu.Lock()
+	c.byComp = make(map[string]*binary.Component)
+	c.decMu.Unlock()
+	c.abiMu.Lock()
+	c.byABI = make(map[*binary.Component]map[uint32]*boundExportABI)
+	c.abiMu.Unlock()
+	c.planMu.Lock()
+	c.byPlan = make(map[*binary.Component]*graphPlan)
+	c.planMu.Unlock()
 	return firstErr
 }
 

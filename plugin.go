@@ -19,11 +19,11 @@ const PluginID = "github.com/wago-org/component-model"
 
 const (
 	// Wago charges an unbounded memory32 declaration at its finite 65,535-page
-	// implementation reservation. Sixteen GiB therefore admits four ordinary
+	// implementation reservation. Twenty GiB therefore admits five ordinary
 	// unbounded-memory modules while the separate slot limit leaves room for
 	// memoryless adapters and linker shims.
 	requestedMaxCoreInstances   = 64
-	requestedMaxCoreMemoryBytes = 16 << 30
+	requestedMaxCoreMemoryBytes = 20 << 30
 )
 
 // Contract is the major-versioned Component Model execution service consumed
@@ -49,7 +49,7 @@ func Definition() wago.PluginDefinition {
 	return wago.PluginDefinition{
 		ID:          PluginID,
 		Name:        "Wago Component Model",
-		Version:     "0.1.0",
+		Version:     "0.1.1",
 		Description: "WebAssembly Component Model execution and Canonical ABI linking for Wago.",
 		Stability:   wago.Experimental,
 		Compatibility: wago.Compatibility{

@@ -205,6 +205,10 @@ func (st *stackfulTask) run() error {
 	if err != nil {
 		putUint64Slice(stackPtr)
 		in.leaveRun()
+		var trap guestResultTrap
+		if errors.As(err, &trap) {
+			in.poisoned.Store(true)
+		}
 		return st.fail(err)
 	}
 	if err := t.returnValues(results); err != nil { // traps if guest already resolved

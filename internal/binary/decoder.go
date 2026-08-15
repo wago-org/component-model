@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/wago-org/component-model/internal/leb128"
 )
@@ -30,20 +31,61 @@ var (
 	ErrTruncatedBinary    = errors.New("truncated binary")
 )
 
-// Decode parses a WebAssembly Component Model container from a reader.
+// DecodeLimits bounds resources consumed while decoding one component tree.
+// Nested components share the same aggregate section budget.
+type DecodeLimits struct {
+	MaxInputBytes uint64
+	MaxDepth      uint32
+	MaxSections   uint64
+}
+
+var DefaultDecodeLimits = DecodeLimits{
+	MaxInputBytes: 256 << 20,
+	MaxDepth:      64,
+	MaxSections:   1 << 20,
+}
+
+func normalizeDecodeLimits(limits DecodeLimits) DecodeLimits {
+	if limits.MaxInputBytes == 0 {
+		limits.MaxInputBytes = DefaultDecodeLimits.MaxInputBytes
+	}
+	if limits.MaxDepth == 0 {
+		limits.MaxDepth = DefaultDecodeLimits.MaxDepth
+	}
+	if limits.MaxSections == 0 {
+		limits.MaxSections = DefaultDecodeLimits.MaxSections
+	}
+	return limits
+}
+
+// Decode parses a WebAssembly Component Model container from a reader using
+// DefaultDecodeLimits.
 // It validates the preamble, iterates outer component sections, and decodes
 // type, import, and export sections into Go structs. Other sections are
 // recorded but not fully decoded.
 func Decode(r io.Reader) (*Component, error) {
-	// Read the entire binary into memory for slice-based offset tracking.
-	// (Matching the pattern of the core wasm decoder.)
-	buf, err := io.ReadAll(r)
+	return DecodeWithLimits(r, DefaultDecodeLimits)
+}
+
+// DecodeWithLimits is Decode with caller-selected resource limits.
+func DecodeWithLimits(r io.Reader, limits DecodeLimits) (*Component, error) {
+	limits = normalizeDecodeLimits(limits)
+	readLimit := limits.MaxInputBytes
+	if readLimit >= math.MaxInt64 {
+		readLimit = math.MaxInt64 - 1
+	}
+	buf, err := io.ReadAll(io.LimitReader(r, int64(readLimit)+1))
 	if err != nil {
 		return nil, fmt.Errorf("read binary: %w", err)
 	}
+	if uint64(len(buf)) > limits.MaxInputBytes {
+		return nil, fmt.Errorf("component input byte limit exceeded: got more than %d byte(s)", limits.MaxInputBytes)
+	}
 
-	return decodeComponent(buf)
+	return decodeComponent(buf, limits, &decodeBudget{}, 0)
 }
+
+type decodeBudget struct{ sections uint64 }
 
 const maxVectorElements = 1 << 20
 
@@ -69,7 +111,10 @@ func readBoundedVecCount(buf []byte, off int, minElementBytes uint64) (uint32, i
 	return count, after, nil
 }
 
-func decodeComponent(buf []byte) (*Component, error) {
+func decodeComponent(buf []byte, limits DecodeLimits, budget *decodeBudget, depth uint32) (*Component, error) {
+	if depth > limits.MaxDepth {
+		return nil, fmt.Errorf("component nesting depth %d exceeds limit %d", depth, limits.MaxDepth)
+	}
 	offset := 0
 
 	// Validate magic number.
@@ -97,6 +142,10 @@ func decodeComponent(buf []byte) (*Component, error) {
 	// type sections interleaved with module/instance/alias sections), so there
 	// is no section-order constraint to enforce and results accumulate.
 	for offset < len(buf) {
+		budget.sections++
+		if budget.sections > limits.MaxSections {
+			return nil, fmt.Errorf("component section limit exceeded: more than %d section(s)", limits.MaxSections)
+		}
 		sectionID := buf[offset]
 		offset++
 
@@ -158,7 +207,7 @@ func decodeComponent(buf []byte) (*Component, error) {
 			// component binary (preamble included), so it recurses through
 			// decodeComponent unchanged rather than through Decode (which
 			// would re-read the whole buffer via io.ReadAll).
-			nested, err := decodeComponent(buf[offset : offset+int(sectionSize)])
+			nested, err := decodeComponent(buf[offset:offset+int(sectionSize)], limits, budget, depth+1)
 			if err != nil {
 				return nil, fmt.Errorf("nested component[%d]: %w", len(c.NestedComponents), err)
 			}
