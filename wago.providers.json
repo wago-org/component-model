@@ -6,7 +6,7 @@
       "definition": {
         "id": "github.com/wago-org/component-model",
         "name": "Wago Component Model",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "description": "WebAssembly Component Model execution and Canonical ABI linking for Wago.",
         "stability": "experimental",
         "compatibility": {
@@ -57,7 +57,7 @@
           }
         ]
       },
-      "definitionDigest": "sha256:5e75bd21d0cb223de3eb390d68a89c2e575ef2ab3e5b120afd9c803870945cf0"
+      "definitionDigest": "sha256:4459cbf4d6aed096f50198ef78ccc86a608b6b32dab8771de3de54c53545a749"
     }
   ]
 }

@@ -49,7 +49,7 @@ func Definition() wago.PluginDefinition {
 	return wago.PluginDefinition{
 		ID:          PluginID,
 		Name:        "Wago Component Model",
-		Version:     "0.1.1",
+		Version:     "0.1.2",
 		Description: "WebAssembly Component Model execution and Canonical ABI linking for Wago.",
 		Stability:   wago.Experimental,
 		Compatibility: wago.Compatibility{
