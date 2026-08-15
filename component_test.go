@@ -216,7 +216,7 @@ func TestPluginShutdownWaitsForComponentCallbackAndRevokesContract(t *testing.T)
 	}()
 	<-entered
 	closeDone := make(chan error, 1)
-	go func() { closeDone <- rt.Close() }()
+	go func() { closeDone <- rt.CloseContext(context.Background()) }()
 	select {
 	case err := <-closeDone:
 		t.Fatalf("runtime closed before callback returned: %v", err)
@@ -303,8 +303,8 @@ func TestDefinitionUsesExactAuthoritiesAndVersionedContract(t *testing.T) {
 		}
 	}
 	scope := definition.Authorities[1].Scope
-	if scope.MaxInstances != 64 || scope.MaxMemoryBytes != 16<<30 {
-		t.Fatalf("core instantiation scope = %#v, want 64 instances and 16 GiB", scope)
+	if scope.MaxInstances != 64 || scope.MaxMemoryBytes != 20<<30 {
+		t.Fatalf("core instantiation scope = %#v, want 64 instances and 20 GiB", scope)
 	}
 }
 
