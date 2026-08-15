@@ -139,9 +139,9 @@ func putCoreValueSlice(p *[]abi.CoreValue) {
 type Instance struct {
 	resolve abi.Resolver
 
-	// syncCallMu serializes top-level synchronous calls. Re-entry in the same
-	// call chain is recognized through syncCallContext so guest -> host -> guest
-	// callbacks do not recursively acquire the gate.
+	// syncCallMu is the instance execution lease. It serializes every top-level
+	// Call and is held across the full lifetime of a PendingCall. Re-entry in
+	// the same call chain is recognized through syncCallContext.
 	syncCallMu sync.Mutex
 
 	// --- CallAsync (host-side non-blocking calls, callasync.go) ---
@@ -385,6 +385,9 @@ type Instance struct {
 	// import in flight.
 	inHostCall int
 }
+
+func (in *Instance) claimAsyncExecution() bool { return in.syncCallMu.TryLock() }
+func (in *Instance) releaseAsyncExecution()    { in.syncCallMu.Unlock() }
 
 // CoreModuleCount returns the number of embedded core modules (real,
 // non-synthetic core wasm binaries from the component's CoreModules section)
@@ -1106,6 +1109,9 @@ func finalizeBoundExport(be *boundExport, resolve abi.Resolver, abiCache *Compil
 // anything outside them is rejected with a descriptive error.
 func Instantiate(ctx context.Context, r wazy.Runtime, componentBytes []byte, opts ...Option) (*Instance, error) {
 	cfg := newConfig(opts)
+	if cfg.registrationErr != nil {
+		return nil, cfg.registrationErr
+	}
 
 	// With a CompileCache, reuse the decoded (immutable) component across
 	// repeated instantiations instead of re-parsing the binary every call --
@@ -1120,6 +1126,9 @@ func Instantiate(ctx context.Context, r wazy.Runtime, componentBytes []byte, opt
 	}
 	if err != nil {
 		return nil, fmt.Errorf("component/instance: decode component: %w", err)
+	}
+	if err := validateCanonicalStringEncodings(comp); err != nil {
+		return nil, err
 	}
 	// Start definitions are decoded so tooling can inspect them, but execution
 	// is not implemented yet. Never instantiate while silently omitting their
@@ -1151,6 +1160,20 @@ func Instantiate(ctx context.Context, r wazy.Runtime, componentBytes []byte, opt
 	return instantiateComponent(ctx, r, comp, componentBytes)
 }
 
+func validateCanonicalStringEncodings(comp *binary.Component) error {
+	for i, canon := range comp.Canons {
+		for _, opt := range canon.Opts {
+			switch opt.Kind {
+			case 0x01:
+				return fmt.Errorf("component/instance: canon %d requests UTF-16 string encoding, which is not supported", i)
+			case 0x02:
+				return fmt.Errorf("component/instance: canon %d requests Latin-1+UTF-16 string encoding, which is not supported", i)
+			}
+		}
+	}
+	return nil
+}
+
 // needsGraphPath and needsImportPath together select the graph engine
 // (instantiateGraph) for any component that has host imports or a non-trivial
 // core structure; a component matching neither is the trivial single-embedded-
@@ -1160,6 +1183,19 @@ func Instantiate(ctx context.Context, r wazy.Runtime, componentBytes []byte, opt
 // table (not just funcs), and a core func index space where canon-produced
 // funcs (lower, resource.*) and core-level func aliases interleave.
 func needsGraphPath(comp *binary.Component) bool {
+	for _, canon := range comp.Canons {
+		if canon.Kind != binary.CanonKindLift {
+			continue
+		}
+		for _, opt := range canon.Opts {
+			// An explicit UTF-8 option is the direct path's existing default.
+			// Every other lift option needs graph resolution (or graph-path
+			// validation) so post-return/realloc/async semantics cannot vanish.
+			if opt.Kind != 0x00 {
+				return true
+			}
+		}
+	}
 	for _, ci := range comp.CoreInstances {
 		if ci.Kind != 0x01 {
 			continue
@@ -1651,16 +1687,16 @@ func (in *Instance) invoke(ctx context.Context, be *boundExport, exportName stri
 	if be.home != nil {
 		target = be.home
 	}
+	if !syncCallContains(ctx, target) {
+		target.syncCallMu.Lock()
+		defer target.syncCallMu.Unlock()
+		ctx = context.WithValue(ctx, syncCallContextKey{}, &syncCallContext{instance: target, parent: syncCallFrom(ctx)})
+	}
 	if be.asyncCallback {
 		return target.invokeAsyncCallback(ctx, be, exportName, args)
 	}
 	if be.stackful {
 		return target.invokeStackful(ctx, be, exportName, args)
-	}
-	if !syncCallContains(ctx, target) {
-		target.syncCallMu.Lock()
-		defer target.syncCallMu.Unlock()
-		ctx = context.WithValue(ctx, syncCallContextKey{}, &syncCallContext{instance: target, parent: syncCallFrom(ctx)})
 	}
 	// target.poisoned mirrors the async paths' own check (async_lift.go) --
 	// a sync export gets no enterRun/leaveRun bracketing (mayEnter never
@@ -1736,10 +1772,26 @@ func wrapUnreachableTrap(err error) error {
 	return err
 }
 
+// guestResultTrap marks a canonical-ABI failure caused by values the guest
+// returned after its core function ran. Static binding/configuration errors
+// remain ordinary errors so they do not lock down an otherwise healthy
+// instance.
+type guestResultTrap struct{ err error }
+
+func (e guestResultTrap) Error() string { return e.err.Error() }
+func (e guestResultTrap) Unwrap() error { return e.err }
+
+func markGuestResultTrap(err error) error {
+	if err == nil {
+		return nil
+	}
+	return guestResultTrap{err: err}
+}
+
 // invokeEntered is invoke's actual call body, split out purely for
-// readability at the poisoning boundary (see the two explicit in.poisoned =
-// true sites below, at the ONLY two points this export's own guest code
-// actually runs: be.coreFn.CallWithStack and be.postReturnFn.CallWithStack).
+// readability at the poisoning boundary. Core-call and post-return traps poison
+// directly; guest-caused canonical-ABI result traps are tagged by liftResult
+// and poison after guest execution has completed.
 //
 // Deliberately NOT poisoning on every error here (an earlier version used a
 // single defer to poison on ANY non-nil err, which is closer to the
@@ -1750,12 +1802,10 @@ func wrapUnreachableTrap(err error) error {
 // core code ever runs), and then keeps calling OTHER, still-valid handles on
 // the SAME instance -- broad poisoning permanently broke every later call.
 // A host-side ABI/argument validation failure (lowerParams, resolveArgHandles,
-// the coreArgs-count static check, liftResult) never actually enters guest
-// code, so -- unlike a real trap escaping a CallWithStack -- it must not
-// poison; matches builtin-trap-poisons-instance's own two poisoning cases
-// (an `unreachable` and a busy-stream host-builtin trap), both of which
-// surface AS be.coreFn.CallWithStack failing, so this narrower rule still
-// covers everything that suite (or the spec) requires here.
+// the coreArgs-count static check, and liftResult's static shape checks) must
+// not poison. liftResult separately tags failures caused by guest-returned
+// memory, discriminants, Unicode scalars, and handles, because guest code has
+// already run by then and those are canonical-ABI traps.
 func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportName string, args []abi.Value) ([]abi.Value, error) {
 	if in.syncTaskNeeded {
 		// The reference's canon_lift constructs a Task for EVERY call,
@@ -1823,7 +1873,7 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 	}
 	putCoreValueSlice(coreArgsPtr) // coreArgs' bits are now copied into stack; done with it
 
-	if err := be.coreFn.CallWithStack(ctx, stack); err != nil {
+	if err := callCoreWithStack(ctx, be.coreFn, stack); err != nil {
 		putUint64Slice(stackPtr)
 		in.poisoned.Store(true) // guest code actually ran and trapped -- see this func's doc
 		err = wrapUnreachableTrap(err)
@@ -1841,6 +1891,10 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 	results, err := in.liftResult(be, rawResults, mem, memAvailable, exportName)
 	if err != nil {
 		putUint64Slice(stackPtr)
+		var trap guestResultTrap
+		if errors.As(err, &trap) {
+			in.poisoned.Store(true)
+		}
 		return nil, err
 	}
 
@@ -1855,7 +1909,7 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 		}
 		// post-return takes the same flat results as params; CallWithStack lets
 		// it reuse rawResults' own buffer (the guest reads params, writes none).
-		if err := be.postReturnFn.CallWithStack(ctx, rawResults); err != nil {
+		if err := callCoreWithStack(ctx, be.postReturnFn, rawResults); err != nil {
 			putUint64Slice(stackPtr)
 			in.poisoned.Store(true) // guest code actually ran and trapped -- see this func's doc
 			return nil, fmt.Errorf("component/instance: export %q: post-return %q: %w", exportName, be.postReturnFuncName, err)
@@ -1864,6 +1918,34 @@ func (in *Instance) invokeEntered(ctx context.Context, be *boundExport, exportNa
 
 	putUint64Slice(stackPtr)
 	return results, nil
+}
+
+// callCoreWithStack converts an error panic raised by a Component Model host
+// adapter into the trap error returned by the public component call. The core
+// engine already returns its own traps as errors, but deliberately re-panics
+// unknown host panic values. Canonical ABI adapters use error panics to abort a
+// guest call when lifting or lowering detects invalid guest-controlled memory.
+// Non-error panics remain programmer bugs and are not hidden.
+func callCoreWithStack(ctx context.Context, fn api.Function, stack []uint64) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if recoveredErr, ok := recovered.(error); ok {
+				err = recoveredErr
+				return
+			}
+			panic(recovered)
+		}
+	}()
+	// Some core engines use a zero-length stack as the sentinel for "nothing
+	// to execute" in their optimized path. A real () -> () function must still
+	// run: post-return functions commonly have that signature and may trap or
+	// perform mandatory cleanup. Use the ordinary entry point for this one
+	// shape so it cannot be skipped.
+	if len(stack) == 0 {
+		_, err = fn.Call(ctx)
+		return err
+	}
+	return fn.CallWithStack(ctx, stack)
 }
 
 // lowerParams lowers each component-level argument into its flattened core
@@ -1985,7 +2067,7 @@ func (in *Instance) liftResult(be *boundExport, rawResults []uint64, mem []byte,
 		}
 		val, err := abi.Load(mem, uint32(rawResults[0]), rt, in.resolve)
 		if err != nil {
-			return nil, fmt.Errorf("component/instance: export %q result: load spilled result: %w", exportName, err)
+			return nil, markGuestResultTrap(fmt.Errorf("component/instance: export %q result: load spilled result: %w", exportName, err))
 		}
 		if err := in.validateLiftedStreamFutureResult(rt, val, exportName); err != nil {
 			return nil, err
@@ -2017,7 +2099,7 @@ func (in *Instance) liftResult(be *boundExport, rawResults []uint64, mem []byte,
 	val, err := be.resultStep.Lift(coreResults, mem)
 	putCoreValueSlice(coreResultsPtr)
 	if err != nil {
-		return nil, fmt.Errorf("component/instance: export %q result: lift: %w", exportName, err)
+		return nil, markGuestResultTrap(fmt.Errorf("component/instance: export %q result: lift: %w", exportName, err))
 	}
 	if err := in.validateLiftedStreamFutureResult(rt, val, exportName); err != nil {
 		return nil, err
@@ -2054,7 +2136,7 @@ func (in *Instance) validateLiftedStreamFutureResult(rt binary.TypeDesc, val abi
 			elemDesc = ed
 		}
 		if _, err := peekReadableStreamEnd(in, in.resources, elemDesc, h); err != nil {
-			return fmt.Errorf("component/instance: export %q result: %w", exportName, err)
+			return markGuestResultTrap(fmt.Errorf("component/instance: export %q result: %w", exportName, err))
 		}
 	case binary.FutureDesc:
 		h, ok := val.(uint32)
@@ -2070,7 +2152,7 @@ func (in *Instance) validateLiftedStreamFutureResult(rt binary.TypeDesc, val abi
 			elemDesc = ed
 		}
 		if _, err := peekReadableFutureEnd(in, in.resources, elemDesc, h); err != nil {
-			return fmt.Errorf("component/instance: export %q result: %w", exportName, err)
+			return markGuestResultTrap(fmt.Errorf("component/instance: export %q result: %w", exportName, err))
 		}
 	}
 	return nil
@@ -2078,58 +2160,40 @@ func (in *Instance) validateLiftedStreamFutureResult(rt binary.TypeDesc, val abi
 
 // DropResource drops an own<resource> handle the host received from a guest
 // export (e.g. one returned by a constructor or factory func), completing the
-// resource lifecycle: it runs the guest's destructor if the component defines
-// one, then removes the handle so the slot is freed and any later use of that
-// handle fails loud. iface/resourceName name the resource (e.g.
-// "example:res/counters", "counter"). Dropping a borrow, an unknown handle, or
-// one with outstanding lends fails loud.
-//
-// The destructor is the guest core func the component exports as
-// "<iface>#[dtor]<resourceName>" (wit-component emits it for every
-// guest-defined resource); if no such export exists the handle is still
-// removed. Host-owned resources (WASI/http) are not dropped this way -- the
-// host owns their lifecycle directly.
+// resource lifecycle: it selects the destructor by the handle's actual
+// resource-type identity, runs it, and only then removes the handle. A failed
+// destructor leaves the handle live; a guest-destructor trap poisons the
+// instance. iface/resourceName are retained for diagnostics only.
 func (in *Instance) DropResource(ctx context.Context, iface, resourceName string, handle uint32) error {
-	rep, err := in.resources.DropOwned(handle)
+	if !syncCallContains(ctx, in) {
+		in.syncCallMu.Lock()
+		defer in.syncCallMu.Unlock()
+		ctx = context.WithValue(ctx, syncCallContextKey{}, &syncCallContext{instance: in, parent: syncCallFrom(ctx)})
+	}
+	_, _, guestDtor, err := in.resources.dropOwnedWithDtor(ctx, handle)
 	if err != nil {
+		if guestDtor {
+			in.poisoned.Store(true)
+		}
 		return fmt.Errorf("component/instance: DropResource %s/%s handle %d: %w", iface, resourceName, handle, err)
 	}
-	// Run the guest destructor (frees the guest's backing object) if the guest
-	// core module exports one. in.closers also holds synthetic HOST modules,
-	// on which ExportedFunction panics, so the lookup is guarded.
-	dtorName := iface + "#[dtor]" + resourceName
-	for _, mod := range in.closers {
-		if fn := safeExportedFunction(mod, dtorName); fn != nil {
-			if _, err := fn.Call(ctx, uint64(rep)); err != nil {
-				return fmt.Errorf("component/instance: DropResource %s/%s: destructor: %w", iface, resourceName, err)
-			}
-			break
-		}
-	}
 	return nil
-}
-
-// safeExportedFunction returns mod's exported function named name, or nil --
-// including when mod is a host module (whose ExportedFunction panics by
-// contract). Used to probe guest core modules for a resource destructor without
-// tracking which closers are guest vs host.
-func safeExportedFunction(mod api.Module, name string) (fn api.Function) {
-	defer func() { _ = recover() }()
-	return mod.ExportedFunction(name)
 }
 
 // Close releases every module instantiated for this component (in reverse
 // order of instantiation). It does not close the Runtime passed to
 // Instantiate, which the caller owns.
 func (in *Instance) Close(ctx context.Context) error {
-	in.syncCallMu.Lock()
-	defer in.syncCallMu.Unlock()
 	in.amu.Lock()
 	p := in.pending
 	in.amu.Unlock()
 	if p != nil {
-		in.finishAsync(p, nil, errCallAsyncCancelled)
+		if err := p.Cancel(ctx); err != nil {
+			return err
+		}
 	}
+	in.syncCallMu.Lock()
+	defer in.syncCallMu.Unlock()
 	// Reap every parked goroutine (stackful task or promoted callback-task
 	// segment) in the shared scheduler BEFORE closing core modules
 	// (docs/component-model-async-stackful-design.md §8, Feature 1

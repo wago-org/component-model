@@ -3,6 +3,7 @@ package instance
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/wago-org/component-model/internal/abi"
@@ -23,6 +24,9 @@ type Option func(*config)
 // interface name + function name.
 type config struct {
 	imports map[importKey]*hostImport
+	// registrationErr records the first collision between caller-provided
+	// imports after version compatibility normalization.
+	registrationErr error
 
 	// resourceHooks are invoked with the Instance's *handleTable as soon as
 	// it exists (graph.go's instantiateGraph, right after
@@ -125,19 +129,81 @@ type importKey struct {
 	name  string
 }
 
-// mkImportKey builds an importKey with the interface name's "@x.y.z" version
-// suffix stripped, so host-import matching tolerates the wasi 0.2.x patch
-// version a guest was built against. wazy registers one implementation per
-// interface; a guest built with a newer wasi crate imports e.g.
-// "wasi:io/streams@0.2.12" where the older fixtures import "@0.2.3", but the
-// 0.2.x ABI for a given interface is frozen, so they resolve to the same impl.
-// All importKey construction (both registration and lookup) goes through here
-// so the two sides always agree.
+// mkImportKey normalizes an interface's package version to the Component
+// Model compatibility identity: major for stable packages, 0.minor for
+// pre-1.0 packages, and the full 0.0.patch version. Malformed and qualified
+// versions remain exact so they cannot collide accidentally.
 func mkImportKey(iface, name string) importKey {
-	if i := strings.IndexByte(iface, '@'); i >= 0 {
-		iface = iface[:i]
+	if i := strings.LastIndexByte(iface, '@'); i >= 0 {
+		base, version := iface[:i], iface[i+1:]
+		if normalized, ok := compatibleInterfaceVersion(version); ok {
+			iface = base + "@" + normalized
+		}
 	}
 	return importKey{iface: iface, name: name}
+}
+
+func compatibleInterfaceVersion(version string) (string, bool) {
+	core := version
+	if plus := strings.IndexByte(core, '+'); plus >= 0 {
+		if strings.IndexByte(core[plus+1:], '+') >= 0 || !validSemverIdentifiers(core[plus+1:], false) {
+			return "", false
+		}
+		core = core[:plus]
+	}
+	if dash := strings.IndexByte(core, '-'); dash >= 0 {
+		if !validSemverIdentifiers(core[dash+1:], true) {
+			return "", false
+		}
+		core = core[:dash]
+	}
+	parts := strings.Split(core, ".")
+	if len(parts) != 3 {
+		return "", false
+	}
+	values := [3]uint64{}
+	for i, part := range parts {
+		if part == "" || (len(part) > 1 && part[0] == '0') {
+			return "", false
+		}
+		value, err := strconv.ParseUint(part, 10, 32)
+		if err != nil {
+			return "", false
+		}
+		values[i] = value
+	}
+	switch {
+	case values[0] != 0:
+		return strconv.FormatUint(values[0], 10), true
+	case values[1] != 0:
+		return "0." + strconv.FormatUint(values[1], 10), true
+	default:
+		return "0.0." + strconv.FormatUint(values[2], 10), true
+	}
+}
+
+func validSemverIdentifiers(s string, prerelease bool) bool {
+	if s == "" {
+		return false
+	}
+	for _, identifier := range strings.Split(s, ".") {
+		if identifier == "" {
+			return false
+		}
+		numeric := true
+		for _, r := range identifier {
+			if !((r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '-') {
+				return false
+			}
+			if r < '0' || r > '9' {
+				numeric = false
+			}
+		}
+		if prerelease && numeric && len(identifier) > 1 && identifier[0] == '0' {
+			return false
+		}
+	}
+	return true
 }
 
 // hostImport is a single registered import: its Go implementation plus the
@@ -220,6 +286,17 @@ func newConfig(opts []Option) *config {
 	return c
 }
 
+func (c *config) registerImport(iface, name string, hi *hostImport) {
+	key := mkImportKey(iface, name)
+	if _, exists := c.imports[key]; exists {
+		if c.registrationErr == nil {
+			c.registrationErr = fmt.Errorf("component/instance: duplicate host import registration for %q %q (compatibility key %q)", iface, name, key.iface)
+		}
+		return
+	}
+	c.imports[key] = hi
+}
+
 // WithImport registers a Go implementation for a component import. iface is
 // the imported interface name (e.g. "test:pkg/host"), name is the function
 // name within it (e.g. "log"), and params/results are that function's WIT
@@ -227,7 +304,7 @@ func newConfig(opts []Option) *config {
 // binary.PrimitiveDesc{Prim: "string"}).
 func WithImport(iface, name string, fn HostFunc, params, results []binary.TypeDesc) Option {
 	return func(c *config) {
-		c.imports[mkImportKey(iface, name)] = &hostImport{fn: fn, params: params, results: results}
+		c.registerImport(iface, name, &hostImport{fn: fn, params: params, results: results})
 	}
 }
 
@@ -332,7 +409,7 @@ func runResourceHooks(cfg *config, resources *handleTable) {
 // into config's import map.
 func withImportCustom(iface, name string, fn HostFunc, fd binary.FuncDesc, resolve abi.Resolver) Option {
 	return func(c *config) {
-		c.imports[mkImportKey(iface, name)] = &hostImport{fn: fn, customFD: &fd, customResolve: resolve}
+		c.registerImport(iface, name, &hostImport{fn: fn, customFD: &fd, customResolve: resolve})
 	}
 }
 

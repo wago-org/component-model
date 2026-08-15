@@ -521,6 +521,51 @@ func (t *handleTable) DropOwned(h uint32) (rep uint32, err error) {
 	return e.rep, nil
 }
 
+// dropOwnedWithDtor validates an owning handle, runs the destructor selected by
+// the handle's actual resource identity, and only then consumes the handle.
+// A destructor failure leaves the handle live so the caller never loses the
+// only reference to a resource that failed to clean up.
+func (t *handleTable) dropOwnedWithDtor(ctx context.Context, h uint32) (typeIdx, rep uint32, guestDtor bool, err error) {
+	t.mu.Lock()
+	raw, ok := t.entryAt(h)
+	if !ok {
+		t.mu.Unlock()
+		return 0, 0, false, fmt.Errorf("handle %d does not name a live resource", h)
+	}
+	e, ok := raw.(*resourceEntry)
+	if !ok {
+		t.mu.Unlock()
+		return 0, 0, false, fmt.Errorf("handle %d is not a resource handle", h)
+	}
+	if !e.own {
+		t.mu.Unlock()
+		return 0, 0, false, fmt.Errorf("handle %d is a borrow, not an own handle", h)
+	}
+	if e.lendCount != 0 {
+		t.mu.Unlock()
+		return 0, 0, false, fmt.Errorf("handle %d has %d outstanding borrow(s), cannot drop", h, e.lendCount)
+	}
+	typeIdx, rep = e.typeIdx, e.rep
+	dtor := t.dtors[typeIdx]
+	guestDtor = dtor != nil && !t.hostDtors[typeIdx]
+	t.mu.Unlock()
+
+	if dtor != nil {
+		if err := dtor(ctx, rep); err != nil {
+			return typeIdx, rep, guestDtor, err
+		}
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if current, ok := t.entryAt(h); !ok || current != raw {
+		return typeIdx, rep, guestDtor, fmt.Errorf("handle %d changed while its destructor was running", h)
+	}
+	delete(t.entries, h)
+	t.free = append(t.free, h)
+	return typeIdx, rep, guestDtor, nil
+}
+
 // Lend increments h's outstanding-lend count, blocking TakeOwn/Drop until
 // released via Unlend. This is the accounting primitive canon_resource_drop
 // and lift_own check (`trap_if(h.num_lends != 0)`); see the handleTable doc

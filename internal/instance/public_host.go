@@ -153,7 +153,7 @@ func NewHarness(opts []Option) *Harness {
 }
 
 // Func returns the HostFunc registered for iface/name, or nil. iface is
-// matched with its version suffix stripped, matching registration.
+// matched by its Component Model compatibility version, matching registration.
 func (h *Harness) Func(iface, name string) HostFunc {
 	hi, ok := h.cfg.imports[mkImportKey(iface, name)]
 	if !ok {
@@ -168,8 +168,8 @@ func (h *Harness) Func(iface, name string) HostFunc {
 func (h *Harness) Resources() *HandleTable { return h.resources }
 
 // Registered returns every import these options registered, as
-// interface name -> func names. Interface names appear with their version
-// suffix already stripped, matching how registration keys them.
+// interface name -> func names. Interface names use their normalized Component
+// Model compatibility version, matching how registration keys them.
 func (h *Harness) Registered() map[string][]string {
 	out := map[string][]string{}
 	for key := range h.cfg.imports {

@@ -26,6 +26,24 @@ type Realloc struct {
 	Call func(ctx context.Context, origPtr, origSize, align, newSize uint32) (uint32, error)
 }
 
+const maxListElements = 1 << 20
+
+func checkedRange(memLen int, ptr, size uint32) (start, end int, err error) {
+	end64 := uint64(ptr) + uint64(size)
+	if end64 > uint64(memLen) {
+		return 0, 0, fmt.Errorf("buffer overflow: ptr=%d size=%d mem_len=%d", ptr, size, memLen)
+	}
+	return int(ptr), int(end64), nil
+}
+
+func checkedByteLength(length, elemSize uint32) (uint32, error) {
+	byteLen := uint64(length) * uint64(elemSize)
+	if byteLen > math.MaxUint32 {
+		return 0, fmt.Errorf("canonical ABI list byte length overflow: length=%d elem_size=%d", length, elemSize)
+	}
+	return uint32(byteLen), nil
+}
+
 // Grow performs one allocation, threading Ctx into the cached Call.
 func (r Realloc) Grow(origPtr, origSize, align, newSize uint32) (uint32, error) {
 	if r.Call == nil {
@@ -52,7 +70,7 @@ func Load(mem []byte, ptr uint32, t bintype.TypeDesc, resolve Resolver) (Value, 
 	if err != nil {
 		return nil, err
 	}
-	if ptr != Align(ptr, align) {
+	if align != 0 && ptr%align != 0 {
 		return nil, fmt.Errorf("load: pointer %d not aligned to %d", ptr, align)
 	}
 
@@ -60,7 +78,7 @@ func Load(mem []byte, ptr uint32, t bintype.TypeDesc, resolve Resolver) (Value, 
 	if err != nil {
 		return nil, err
 	}
-	if uint32(len(mem)) < ptr+size {
+	if _, _, err := checkedRange(len(mem), ptr, size); err != nil {
 		return nil, fmt.Errorf("load: buffer overflow: ptr=%d size=%d mem_len=%d", ptr, size, len(mem))
 	}
 
@@ -187,11 +205,12 @@ func loadPrimitive(mem []byte, ptr uint32, prim string) (Value, error) {
 
 // loadInt reads nbytes from memory at ptr as a little-endian integer.
 func loadInt(mem []byte, ptr uint32, nbytes uint32, signed bool) (Value, error) {
-	if uint32(len(mem)) < ptr+nbytes {
+	start, end, err := checkedRange(len(mem), ptr, nbytes)
+	if err != nil {
 		return nil, fmt.Errorf("loadInt: buffer overflow at ptr=%d nbytes=%d mem_len=%d", ptr, nbytes, len(mem))
 	}
 
-	bytes := mem[ptr : ptr+nbytes]
+	bytes := mem[start:end]
 	switch nbytes {
 	case 1:
 		v := uint32(bytes[0])
@@ -238,10 +257,11 @@ func loadInt(mem []byte, ptr uint32, nbytes uint32, signed bool) (Value, error) 
 // (including loadString) see identical messages.
 func readU32LE(mem []byte, ptr uint32) (uint32, error) {
 	const nbytes = 4
-	if uint32(len(mem)) < ptr+nbytes {
+	start, end, err := checkedRange(len(mem), ptr, nbytes)
+	if err != nil {
 		return 0, fmt.Errorf("loadInt: buffer overflow at ptr=%d nbytes=%d mem_len=%d", ptr, nbytes, len(mem))
 	}
-	return binary.LittleEndian.Uint32(mem[ptr : ptr+nbytes]), nil
+	return binary.LittleEndian.Uint32(mem[start:end]), nil
 }
 
 // loadString reads a string (ptr, length in UTF-8 bytes) from memory.
@@ -255,7 +275,11 @@ func loadString(mem []byte, ptr uint32) (Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	strLen, err := readU32LE(mem, ptr+ptrSize)
+	lenPtr, err := checkedAdd(ptr, ptrSize)
+	if err != nil {
+		return nil, fmt.Errorf("loadString: %w", err)
+	}
+	strLen, err := readU32LE(mem, lenPtr)
 	if err != nil {
 		return nil, err
 	}
@@ -275,10 +299,11 @@ func loadString(mem []byte, ptr uint32) (Value, error) {
 // instead of a second implementation.
 func loadStringFromRange(mem []byte, ptr, byteLen uint32) (string, error) {
 	// UTF-8: byte length is the code unit length.
-	if uint32(len(mem)) < ptr+byteLen {
+	start, end, err := checkedRange(len(mem), ptr, byteLen)
+	if err != nil {
 		return "", fmt.Errorf("loadStringFromRange: string buffer overflow at ptr=%d len=%d mem_len=%d", ptr, byteLen, len(mem))
 	}
-	b := mem[ptr : ptr+byteLen]
+	b := mem[start:end]
 	// The canonical ABI's load_string_from_range traps on malformed UTF-8
 	// (invalid bytes or an incomplete trailing sequence) rather than lifting a
 	// lossy string -- definitions.py decodes with 'strict' and errors out.
@@ -297,7 +322,11 @@ func loadList(mem []byte, ptr uint32, elemType bintype.TypeDesc, resolve Resolve
 	if err != nil {
 		return nil, err
 	}
-	listLen, err := loadInt(mem, ptr+ptrSize, ptrSize, false)
+	lenPtr, err := checkedAdd(ptr, ptrSize)
+	if err != nil {
+		return nil, fmt.Errorf("loadList: %w", err)
+	}
+	listLen, err := loadInt(mem, lenPtr, ptrSize, false)
 	if err != nil {
 		return nil, err
 	}
@@ -323,23 +352,36 @@ func loadListFromRange(mem []byte, ptr, length uint32, elemType bintype.TypeDesc
 	}
 
 	// Check bounds
-	byteLen := length * elemSize
-	if uint32(len(mem)) < ptr+byteLen {
+	byteLen, err := checkedByteLength(length, elemSize)
+	if err != nil {
+		return nil, fmt.Errorf("loadListFromRange: %w", err)
+	}
+	if length > maxListElements {
+		return nil, fmt.Errorf("loadListFromRange: list element count %d exceeds limit %d", length, maxListElements)
+	}
+	if _, _, err := checkedRange(len(mem), ptr, byteLen); err != nil {
 		return nil, fmt.Errorf("loadListFromRange: list buffer overflow at ptr=%d len=%d mem_len=%d", ptr, byteLen, len(mem))
 	}
 
 	// Check alignment
-	if ptr != Align(ptr, elemAlign) {
+	if elemAlign != 0 && ptr%elemAlign != 0 {
 		return nil, fmt.Errorf("loadListFromRange: list pointer %d not aligned to %d", ptr, elemAlign)
 	}
 
 	result := make([]Value, length)
+	elemPtr := ptr
 	for i := range length {
-		v, err := loadValue(mem, ptr+i*elemSize, elemType, resolve)
+		v, err := loadValue(mem, elemPtr, elemType, resolve)
 		if err != nil {
 			return nil, fmt.Errorf("loadListFromRange[%d]: %w", i, err)
 		}
 		result[i] = v
+		if i+1 < length {
+			elemPtr, err = checkedAdd(elemPtr, elemSize)
+			if err != nil {
+				return nil, fmt.Errorf("loadListFromRange[%d]: %w", i, err)
+			}
+		}
 	}
 	return result, nil
 }
@@ -358,7 +400,10 @@ func loadRecord(mem []byte, ptr uint32, desc bintype.RecordDesc, resolve Resolve
 		if err != nil {
 			return nil, err
 		}
-		offset = Align(offset, fieldAlign)
+		offset, err = checkedAlign(offset, fieldAlign)
+		if err != nil {
+			return nil, fmt.Errorf("loadRecord: field %s: %w", field.Name, err)
+		}
 
 		v, err := loadValue(mem, offset, fieldType, resolve)
 		if err != nil {
@@ -370,7 +415,10 @@ func loadRecord(mem []byte, ptr uint32, desc bintype.RecordDesc, resolve Resolve
 		if err != nil {
 			return nil, err
 		}
-		offset += fieldSize
+		offset, err = checkedAdd(offset, fieldSize)
+		if err != nil {
+			return nil, fmt.Errorf("loadRecord: field %s: %w", field.Name, err)
+		}
 	}
 
 	return result, nil
@@ -395,12 +443,18 @@ func loadVariant(mem []byte, ptr uint32, desc bintype.VariantDesc, resolve Resol
 	}
 
 	// Compute offset to payload
-	offset := ptr + discSize
+	offset, err := checkedAdd(ptr, discSize)
+	if err != nil {
+		return nil, fmt.Errorf("loadVariant: %w", err)
+	}
 	maxCaseAlign, err := MaxCaseAlignment(desc.Cases, resolve)
 	if err != nil {
 		return nil, err
 	}
-	offset = Align(offset, maxCaseAlign)
+	offset, err = checkedAlign(offset, maxCaseAlign)
+	if err != nil {
+		return nil, fmt.Errorf("loadVariant: %w", err)
+	}
 
 	// Load payload if present
 	c := desc.Cases[caseIdx]
@@ -433,7 +487,10 @@ func loadTuple(mem []byte, ptr uint32, desc bintype.TupleDesc, resolve Resolver)
 		if err != nil {
 			return nil, err
 		}
-		offset = Align(offset, elemAlign)
+		offset, err = checkedAlign(offset, elemAlign)
+		if err != nil {
+			return nil, fmt.Errorf("loadTuple: element %d: %w", i, err)
+		}
 
 		v, err := loadValue(mem, offset, elemType, resolve)
 		if err != nil {
@@ -445,7 +502,10 @@ func loadTuple(mem []byte, ptr uint32, desc bintype.TupleDesc, resolve Resolver)
 		if err != nil {
 			return nil, err
 		}
-		offset += elemSize
+		offset, err = checkedAdd(offset, elemSize)
+		if err != nil {
+			return nil, fmt.Errorf("loadTuple: element %d: %w", i, err)
+		}
 	}
 
 	return result, nil
@@ -493,14 +553,20 @@ func loadOption(mem []byte, ptr uint32, elemType bintype.TypeDesc, resolve Resol
 	}
 
 	discIdx := disc.(uint32)
-	offset := ptr + 1
+	offset, err := checkedAdd(ptr, 1)
+	if err != nil {
+		return nil, fmt.Errorf("loadOption: %w", err)
+	}
 
 	// Align to element type alignment
 	elemAlign, err := Alignment(elemType, resolve)
 	if err != nil {
 		return nil, err
 	}
-	offset = Align(offset, elemAlign)
+	offset, err = checkedAlign(offset, elemAlign)
+	if err != nil {
+		return nil, fmt.Errorf("loadOption: %w", err)
+	}
 
 	switch discIdx {
 	case 0:
@@ -522,7 +588,10 @@ func loadResult(mem []byte, ptr uint32, desc bintype.ResultDesc, resolve Resolve
 	}
 
 	discIdx := disc.(uint32)
-	offset := ptr + 1
+	offset, err := checkedAdd(ptr, 1)
+	if err != nil {
+		return nil, fmt.Errorf("loadResult: %w", err)
+	}
 
 	// Compute max alignment of both arms
 	maxAlign := uint32(1)
@@ -552,7 +621,10 @@ func loadResult(mem []byte, ptr uint32, desc bintype.ResultDesc, resolve Resolve
 			maxAlign = errAlign
 		}
 	}
-	offset = Align(offset, maxAlign)
+	offset, err = checkedAlign(offset, maxAlign)
+	if err != nil {
+		return nil, fmt.Errorf("loadResult: %w", err)
+	}
 
 	switch discIdx {
 	case 0:
@@ -596,7 +668,7 @@ func Store(mem []byte, ptr uint32, t bintype.TypeDesc, v Value, resolve Resolver
 	if err != nil {
 		return err
 	}
-	if ptr != Align(ptr, align) {
+	if align != 0 && ptr%align != 0 {
 		return fmt.Errorf("store: pointer %d not aligned to %d", ptr, align)
 	}
 
@@ -604,7 +676,7 @@ func Store(mem []byte, ptr uint32, t bintype.TypeDesc, v Value, resolve Resolver
 	if err != nil {
 		return err
 	}
-	if uint32(len(mem)) < ptr+size {
+	if _, _, err := checkedRange(len(mem), ptr, size); err != nil {
 		return fmt.Errorf("store: buffer overflow: ptr=%d size=%d mem_len=%d", ptr, size, len(mem))
 	}
 
@@ -756,7 +828,8 @@ func storePrimitive(mem []byte, ptr uint32, prim string, v Value, realloc Reallo
 
 // storeInt writes an integer to memory in little-endian format.
 func storeInt(mem []byte, ptr uint32, v any, nbytes uint32) error {
-	if uint32(len(mem)) < ptr+nbytes {
+	start, end, err := checkedRange(len(mem), ptr, nbytes)
+	if err != nil {
 		return fmt.Errorf("storeInt: buffer overflow at ptr=%d nbytes=%d mem_len=%d", ptr, nbytes, len(mem))
 	}
 
@@ -774,7 +847,7 @@ func storeInt(mem []byte, ptr uint32, v any, nbytes uint32) error {
 		return fmt.Errorf("storeInt: unsupported type %T", v)
 	}
 
-	bytes := mem[ptr : ptr+nbytes]
+	bytes := mem[start:end]
 	switch nbytes {
 	case 1:
 		bytes[0] = byte(u64Val & 0xFF)
@@ -804,7 +877,11 @@ func storeString(mem []byte, ptr uint32, s string, realloc Realloc) error {
 	if err := storeInt(mem, ptr, newPtr, ptrSize); err != nil {
 		return fmt.Errorf("storeString: store ptr failed: %w", err)
 	}
-	if err := storeInt(mem, ptr+ptrSize, byteLen, ptrSize); err != nil {
+	lenPtr, err := checkedAdd(ptr, ptrSize)
+	if err != nil {
+		return fmt.Errorf("storeString: %w", err)
+	}
+	if err := storeInt(mem, lenPtr, byteLen, ptrSize); err != nil {
 		return fmt.Errorf("storeString: store len failed: %w", err)
 	}
 
@@ -828,12 +905,13 @@ func allocStoreString(mem []byte, s string, realloc Realloc) (uint32, uint32, er
 		return 0, 0, fmt.Errorf("realloc failed: %w", err)
 	}
 
-	if uint32(len(mem)) < newPtr+byteLen {
+	start, end, rangeErr := checkedRange(len(mem), newPtr, byteLen)
+	if rangeErr != nil {
 		return 0, 0, fmt.Errorf("allocated memory out of bounds: ptr=%d size=%d", newPtr, byteLen)
 	}
 
 	// Copy string bytes to memory
-	copy(mem[newPtr:newPtr+byteLen], strBytes)
+	copy(mem[start:end], strBytes)
 
 	return newPtr, byteLen, nil
 }
@@ -850,7 +928,11 @@ func storeList(mem []byte, ptr uint32, v Value, elemType bintype.TypeDesc, resol
 	if err := storeInt(mem, ptr, newPtr, ptrSize); err != nil {
 		return err
 	}
-	return storeInt(mem, ptr+ptrSize, length, ptrSize)
+	lenPtr, err := checkedAdd(ptr, ptrSize)
+	if err != nil {
+		return fmt.Errorf("storeList: %w", err)
+	}
+	return storeInt(mem, lenPtr, length, ptrSize)
 }
 
 // allocStoreAnyList stores a list value that is EITHER the general
@@ -891,10 +973,11 @@ func allocStoreBytes(mem []byte, b []byte, realloc Realloc) (uint32, uint32, err
 	if err != nil {
 		return 0, 0, fmt.Errorf("realloc failed: %w", err)
 	}
-	if uint32(len(mem)) < newPtr+byteLen {
+	start, end, rangeErr := checkedRange(len(mem), newPtr, byteLen)
+	if rangeErr != nil {
 		return 0, 0, fmt.Errorf("allocated memory out of bounds: ptr=%d size=%d", newPtr, byteLen)
 	}
-	copy(mem[newPtr:newPtr+byteLen], b)
+	copy(mem[start:end], b)
 	return newPtr, byteLen, nil
 }
 
@@ -918,21 +1001,33 @@ func allocStoreList(mem []byte, list []Value, elemType bintype.TypeDesc, resolve
 		return 0, 0, err
 	}
 
-	byteLen := uint32(len(list)) * elemSize
+	if uint64(len(list)) > math.MaxUint32 {
+		return 0, 0, fmt.Errorf("list element count %d exceeds memory32", len(list))
+	}
+	byteLen, err := checkedByteLength(uint32(len(list)), elemSize)
+	if err != nil {
+		return 0, 0, err
+	}
 	newPtr, err := realloc.Grow(0, 0, elemAlign, byteLen)
 	if err != nil {
 		return 0, 0, fmt.Errorf("realloc failed: %w", err)
 	}
 
-	if uint32(len(mem)) < newPtr+byteLen {
+	if _, _, err := checkedRange(len(mem), newPtr, byteLen); err != nil {
 		return 0, 0, fmt.Errorf("allocated memory out of bounds: ptr=%d size=%d", newPtr, byteLen)
 	}
 
 	// Store each element
+	elemPtr := newPtr
 	for i, elem := range list {
-		elemPtr := newPtr + uint32(i)*elemSize
 		if err := storeValue(mem, elemPtr, elemType, elem, resolve, realloc); err != nil {
 			return 0, 0, fmt.Errorf("[%d]: %w", i, err)
+		}
+		if i+1 < len(list) {
+			elemPtr, err = checkedAdd(elemPtr, elemSize)
+			if err != nil {
+				return 0, 0, fmt.Errorf("[%d]: %w", i, err)
+			}
 		}
 	}
 
@@ -960,7 +1055,10 @@ func storeRecord(mem []byte, ptr uint32, v Value, desc bintype.RecordDesc, resol
 		if err != nil {
 			return err
 		}
-		offset = Align(offset, fieldAlign)
+		offset, err = checkedAlign(offset, fieldAlign)
+		if err != nil {
+			return fmt.Errorf("storeRecord: field %s: %w", field.Name, err)
+		}
 
 		if err := storeValue(mem, offset, fieldType, fields[i], resolve, realloc); err != nil {
 			return fmt.Errorf("storeRecord: field %s: %w", field.Name, err)
@@ -970,7 +1068,10 @@ func storeRecord(mem []byte, ptr uint32, v Value, desc bintype.RecordDesc, resol
 		if err != nil {
 			return err
 		}
-		offset += fieldSize
+		offset, err = checkedAdd(offset, fieldSize)
+		if err != nil {
+			return fmt.Errorf("storeRecord: field %s: %w", field.Name, err)
+		}
 	}
 
 	return nil
@@ -998,12 +1099,18 @@ func storeVariant(mem []byte, ptr uint32, v Value, desc bintype.VariantDesc, res
 	}
 
 	// Compute offset to payload
-	offset := ptr + discSize
+	offset, err := checkedAdd(ptr, discSize)
+	if err != nil {
+		return fmt.Errorf("storeVariant: %w", err)
+	}
 	maxCaseAlign, err := MaxCaseAlignment(desc.Cases, resolve)
 	if err != nil {
 		return err
 	}
-	offset = Align(offset, maxCaseAlign)
+	offset, err = checkedAlign(offset, maxCaseAlign)
+	if err != nil {
+		return fmt.Errorf("storeVariant: %w", err)
+	}
 
 	// Store payload if present
 	c := desc.Cases[vv.Disc]
@@ -1044,7 +1151,10 @@ func storeTuple(mem []byte, ptr uint32, v Value, desc bintype.TupleDesc, resolve
 		if err != nil {
 			return err
 		}
-		offset = Align(offset, elemAlign)
+		offset, err = checkedAlign(offset, elemAlign)
+		if err != nil {
+			return fmt.Errorf("storeTuple: element %d: %w", i, err)
+		}
 
 		if err := storeValue(mem, offset, elemType, elements[i], resolve, realloc); err != nil {
 			return fmt.Errorf("storeTuple: element %d: %w", i, err)
@@ -1054,7 +1164,10 @@ func storeTuple(mem []byte, ptr uint32, v Value, desc bintype.TupleDesc, resolve
 		if err != nil {
 			return err
 		}
-		offset += elemSize
+		offset, err = checkedAdd(offset, elemSize)
+		if err != nil {
+			return fmt.Errorf("storeTuple: element %d: %w", i, err)
+		}
 	}
 
 	return nil
@@ -1112,12 +1225,18 @@ func storeOption(mem []byte, ptr uint32, v Value, elemType bintype.TypeDesc, res
 	}
 
 	// Compute offset to payload
-	offset := ptr + 1
+	offset, err := checkedAdd(ptr, 1)
+	if err != nil {
+		return fmt.Errorf("storeOption: %w", err)
+	}
 	elemAlign, err := Alignment(elemType, resolve)
 	if err != nil {
 		return err
 	}
-	offset = Align(offset, elemAlign)
+	offset, err = checkedAlign(offset, elemAlign)
+	if err != nil {
+		return fmt.Errorf("storeOption: %w", err)
+	}
 
 	// Store payload if some
 	if discIdx == 1 {
@@ -1148,7 +1267,10 @@ func storeResult(mem []byte, ptr uint32, v Value, desc bintype.ResultDesc, resol
 	}
 
 	// Compute offset to payload
-	offset := ptr + 1
+	offset, err := checkedAdd(ptr, 1)
+	if err != nil {
+		return fmt.Errorf("storeResult: %w", err)
+	}
 	maxAlign := uint32(1)
 	if desc.Ok != nil {
 		okType, err := resolveType(desc.Ok, resolve)
@@ -1176,7 +1298,10 @@ func storeResult(mem []byte, ptr uint32, v Value, desc bintype.ResultDesc, resol
 			maxAlign = errAlign
 		}
 	}
-	offset = Align(offset, maxAlign)
+	offset, err = checkedAlign(offset, maxAlign)
+	if err != nil {
+		return fmt.Errorf("storeResult: %w", err)
+	}
 
 	// Store payload
 	if rv.IsErr {
