@@ -138,6 +138,8 @@ type CoreFuncImport struct {
 	Params, Results []ValueType
 }
 
+type coreImportIdentity struct{ module, name string }
+
 type runtimeAdapter struct {
 	compiler     *core.CoreModuleCompiler
 	instantiator *core.CoreInstanceInstantiator
@@ -217,8 +219,8 @@ func (r *runtimeAdapter) instantiateModule(ctx context.Context, c CompiledModule
 	if r == nil || r.instantiator == nil || r.funcrefs == nil {
 		return nil, fmt.Errorf("component: incomplete core execution handles")
 	}
-	imports := core.Imports{}
-	resolvedFuncs := map[string]Function{}
+	instantiateOpts := make([]core.InstantiateOption, 0, len(cm.mod.Imports())+1)
+	resolvedFuncs := map[coreImportIdentity]Function{}
 	hostRefs := make([]*core.HostFuncRef, 0)
 	closeHostRefs := func() {
 		for i := len(hostRefs) - 1; i >= 0; i-- {
@@ -240,7 +242,7 @@ func (r *runtimeAdapter) instantiateModule(ctx context.Context, c CompiledModule
 			if fn == nil {
 				continue
 			}
-			resolvedFuncs[spec.Key()] = fn
+			resolvedFuncs[coreImportIdentity{module: spec.Module, name: spec.Name}] = fn
 			var host core.HostFunc
 			if hf, ok := fn.(*hostFunction); ok {
 				host = core.HostFunc(func(caller core.HostModule, params, results []uint64) {
@@ -284,26 +286,27 @@ func (r *runtimeAdapter) instantiateModule(ctx context.Context, c CompiledModule
 					return nil, fmt.Errorf("component: own core host import %q: %w", spec.Key(), err)
 				}
 				hostRefs = append(hostRefs, owner)
-				imports[spec.Key()] = owner
+				instantiateOpts = append(instantiateOpts, core.WithImport(spec.Module, spec.Name, owner))
 			}
 		case core.ImportMemory:
 			if wm, ok := provider.ExportedMemory(spec.Name).(*memory); ok {
-				imports[spec.Key()] = wm.mem
+				instantiateOpts = append(instantiateOpts, core.WithImport(spec.Module, spec.Name, wm.mem))
 			}
 		case core.ImportGlobal:
 			if wg, ok := provider.ExportedGlobal(spec.Name).(*global); ok {
-				imports[spec.Key()] = wg.g
+				instantiateOpts = append(instantiateOpts, core.WithImport(spec.Module, spec.Name, wg.g))
 			}
 		case core.ImportTable:
 			if wm, ok := provider.(*module); ok {
 				t, err := wm.in.ExportedTable(spec.Name)
 				if err == nil {
-					imports[spec.Key()] = t
+					instantiateOpts = append(instantiateOpts, core.WithImport(spec.Module, spec.Name, t))
 				}
 			}
 		}
 	}
-	owned, err := r.instantiator.Instantiate(ctx, cm.mod, core.WithImports(imports), core.WithSynchronousHostCalls())
+	instantiateOpts = append(instantiateOpts, core.WithSynchronousHostCalls())
+	owned, err := r.instantiator.Instantiate(ctx, cm.mod, instantiateOpts...)
 	if err != nil {
 		closeHostRefs()
 		return nil, err
@@ -331,18 +334,18 @@ type module struct {
 	hostRefs  []*core.HostFuncRef
 }
 
-func newModule(name string, owned *core.ManagedInstance, in *core.Instance, compiled *core.Module, compiledOwner *compiledModule, resolved map[string]Function, hostRefs []*core.HostFuncRef) *module {
+func newModule(name string, owned *core.ManagedInstance, in *core.Instance, compiled *core.Module, compiledOwner *compiledModule, resolved map[coreImportIdentity]Function, hostRefs []*core.HostFuncRef) *module {
 	m := &module{name: name, owned: owned, in: in, compiled: compiledOwner, defs: map[string]FunctionDefinition{}, forwarded: map[string]Function{}, hostRefs: hostRefs}
+	c := compiled.Compiled()
 	for _, f := range compiled.Metadata().Functions {
 		for _, export := range f.Exports {
 			m.defs[export] = functionDefinition{params: valTypes(f.Params), results: valTypes(f.Results)}
 		}
-	}
-	c := compiled.Compiled()
-	for export, index := range c.Exports {
-		if index >= 0 && index < c.NumImports && index < len(c.Imports) {
-			if fn := resolved[c.Imports[index]]; fn != nil {
-				m.forwarded[export] = fn
+		if f.Index < c.NumImports {
+			if fn := resolved[coreImportIdentity{module: f.ImportModule, name: f.ImportName}]; fn != nil {
+				for _, export := range f.Exports {
+					m.forwarded[export] = fn
+				}
 			}
 		}
 	}
@@ -473,7 +476,7 @@ func (m *memory) Size() uint32 {
 	if m == nil || m.mem == nil {
 		return 0
 	}
-	n := len(m.mem.Bytes())
+	n := len(m.mem.UnsafeBytes())
 	if uint64(n) > math.MaxUint32 {
 		return 0
 	}
@@ -483,7 +486,7 @@ func (m *memory) Read(off, n uint32) ([]byte, bool) {
 	if m == nil || m.mem == nil {
 		return nil, false
 	}
-	b := m.mem.Bytes()
+	b := m.mem.UnsafeBytes()
 	end := uint64(off) + uint64(n)
 	if end > uint64(len(b)) {
 		return nil, false
