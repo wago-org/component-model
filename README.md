@@ -193,6 +193,11 @@ Malformed component encodings, invalid type relationships, out-of-bounds
 memory access, bad resource ownership transfers, missing imports, and
 unsupported behavior return errors or named guest traps.
 
+The provider supports Wago on `linux/amd64`, `linux/arm64`, `darwin/amd64`,
+`darwin/arm64`, `windows/amd64`, and `windows/arm64`. Component graphs that
+require a Core WebAssembly feature unavailable on the selected Wago backend
+fail closed during compilation.
+
 ## Test
 
 ```sh

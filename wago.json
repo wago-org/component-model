@@ -12,6 +12,7 @@
     "category": "runtime",
     "tags": ["webassembly", "component-model", "canonical-abi", "runtime"],
     "authors": [{"name": "Jairus Tanaka", "github": "JairusSW"}],
-    "engines": {"wago": ">=0.1.0"}
+    "engines": {"wago": ">=0.1.0"},
+    "platforms": ["darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64", "windows/amd64", "windows/arm64"]
   }
 }
