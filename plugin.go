@@ -53,7 +53,8 @@ func Definition() wago.PluginDefinition {
 		Description: "WebAssembly Component Model execution and Canonical ABI linking for Wago.",
 		Stability:   wago.Experimental,
 		Compatibility: wago.Compatibility{
-			Engines: map[string]string{"wago": ">=0.1.0"},
+			Engines:   map[string]string{"wago": ">=0.1.0"},
+			Platforms: []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64", "windows/amd64", "windows/arm64"},
 		},
 		Provenance: wago.PluginProvenance{
 			Homepage:   "https://github.com/wago-org/component-model#readme",

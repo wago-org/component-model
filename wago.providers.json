@@ -12,7 +12,15 @@
         "compatibility": {
           "engines": {
             "wago": "\u003e=0.1.0"
-          }
+          },
+          "platforms": [
+            "darwin/amd64",
+            "darwin/arm64",
+            "linux/amd64",
+            "linux/arm64",
+            "windows/amd64",
+            "windows/arm64"
+          ]
         },
         "provenance": {
           "homepage": "https://github.com/wago-org/component-model#readme",
@@ -57,7 +65,7 @@
           }
         ]
       },
-      "definitionDigest": "sha256:e5a10f39c613b58e12e5b59d2cdbda1d5a95eff9b247e15eb3063c532c8dca4c"
+      "definitionDigest": "sha256:d2c00c06100f562cb1fe1ac1289c1d9d09ef2c31a5e15d47a48a4c0a39eb0fd3"
     }
   ]
 }

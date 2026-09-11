@@ -39,3 +39,7 @@ failure ledgers in `xfail.json`; an expected failure that starts passing fails
 the suite until its ledger entry is removed. Unsupported parent instances are
 still represented in the manifest, so their child assertions become runnable
 without another fixture import once the parent feature lands.
+
+Platform-specific backend gaps use adjacent `xfail_<goos>.json` ledgers. These
+have the same unexpected-pass behavior as the shared ledger and must only
+describe failures caused by the selected Wago platform backend.

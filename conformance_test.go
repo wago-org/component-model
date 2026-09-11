@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ import (
 	"github.com/wago-org/component-model/internal/binary"
 )
 
-//go:embed testdata/conformance/manifest.json testdata/conformance/xfail.json testdata/conformance/generated/*.wasm testdata/conformance/wasmtime/manifest.json testdata/conformance/wasmtime/xfail.json testdata/conformance/wasmtime/generated/*.wasm
+//go:embed testdata/conformance/manifest.json testdata/conformance/xfail.json testdata/conformance/xfail_windows.json testdata/conformance/generated/*.wasm testdata/conformance/wasmtime/manifest.json testdata/conformance/wasmtime/xfail.json testdata/conformance/wasmtime/xfail_windows.json testdata/conformance/wasmtime/generated/*.wasm
 var conformanceFixtures embed.FS
 
 type conformanceManifest struct {
@@ -166,6 +167,20 @@ func readConformanceXfails(t *testing.T, path string) map[string]string {
 	xfails := map[string]string{}
 	if err := json.Unmarshal(data, &xfails); err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		platformPath := strings.TrimSuffix(path, ".json") + "_windows.json"
+		data, err := conformanceFixtures.ReadFile(platformPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var platform map[string]string
+		if err := json.Unmarshal(data, &platform); err != nil {
+			t.Fatal(err)
+		}
+		for id, reason := range platform {
+			xfails[id] = reason
+		}
 	}
 	return xfails
 }
