@@ -151,7 +151,6 @@
   "binary__binary__0117__L1465": "complete component semantic validation is not implemented",
   "linking__link-time-virtualization__0000__L2": "component core-type sections are not implemented",
   "linking__shared-everything-dynamic-linking__0000__L4": "component core-type sections are not implemented",
-  "linking__shared-everything-dynamic-linking__0010__L152": "component re-entry leaves a host funcref importer live during teardown",
   "linking__shared-everything-dynamic-linking__0010__L152/action/L191": "this component re-entry shape is not implemented by Wago",
   "linking__tags__0000__L7": "core exception handling is disabled in Wago",
   "linking__tags__0003__L36": "core exception handling is disabled in Wago",

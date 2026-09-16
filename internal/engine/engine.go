@@ -243,9 +243,10 @@ func (r *runtimeAdapter) instantiateModule(ctx context.Context, c CompiledModule
 				continue
 			}
 			resolvedFuncs[coreImportIdentity{module: spec.Module, name: spec.Name}] = fn
-			var host core.HostFunc
+			var host any
 			if hf, ok := fn.(*hostFunction); ok {
-				host = core.HostFunc(func(caller core.HostModule, params, results []uint64) {
+				host = func(caller core.Caller, call core.HostCall) {
+					params, results := call.ParamSlots(), call.ResultSlots()
 					defer func() {
 						if recovered := recover(); recovered != nil {
 							switch recovered.(type) {
@@ -266,15 +267,16 @@ func (r *runtimeAdapter) instantiateModule(ctx context.Context, c CompiledModule
 					callCtx := context.WithValue(ctx, activeCallerKey{}, caller)
 					hf.fn.Call(callCtx, callerModule{caller: caller}, stack)
 					copy(results, stack)
-				})
+				}
 			} else if wf, ok := fn.(*wasmFunction); ok {
-				host = core.HostFunc(func(caller core.HostModule, params, results []uint64) {
+				host = func(caller core.Caller, call core.HostCall) {
+					params, results := call.ParamSlots(), call.ResultSlots()
 					out, callErr := wf.mod.in.InvokeFromHost(ctx, caller, wf.name, params...)
 					if callErr != nil {
 						panic(core.HostTrap{Err: callErr})
 					}
 					copy(results, out)
-				})
+				}
 			}
 			if host != nil {
 				owner, err := r.funcrefs.New(host, core.FuncSig{
