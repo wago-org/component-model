@@ -1,4 +1,14 @@
 {
-  "async__intra-streams__0004__L118": "Wago's Windows backend does not yet implement core multi-memory",
+	"async__exceptions__0001__L67": "Wago's Windows backend does not yet implement core exception handling",
+	"async__exceptions__0003__L69": "Wago's Windows backend does not yet implement core exception handling",
+	"async__exceptions__0006__L143": "Wago's Windows backend does not yet implement core exception handling",
+	"async__exceptions__0008__L145": "Wago's Windows backend does not yet implement core exception handling",
+	"async__exceptions__0011__L215": "Wago's Windows backend does not yet implement core exception handling",
+	"async__exceptions__0013__L217": "Wago's Windows backend does not yet implement core exception handling",
+	"exceptions__0000__L22": "Wago's Windows backend does not yet implement core exception handling",
+	"exceptions__0002__L54": "Wago's Windows backend does not yet implement core exception handling",
+	"exceptions__0004__L90": "Wago's Windows backend does not yet implement core exception handling",
+	"exceptions__0006__L132": "Wago's Windows backend does not yet implement core exception handling",
+	"async__intra-streams__0004__L118": "Wago's Windows backend does not yet implement core multi-memory",
   "async__intra-streams__0006__L179": "Wago's Windows backend does not yet implement core multi-memory"
 }
