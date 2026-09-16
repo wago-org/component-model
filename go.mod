@@ -2,4 +2,4 @@ module github.com/wago-org/component-model
 
 go 1.22.0
 
-require github.com/wago-org/wago v0.0.0-20260828131729-c1a5d215cab0
+require github.com/wago-org/wago v0.1.0-beta.8.0.20260916050830-c9ed2455acd9
