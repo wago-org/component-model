@@ -61,6 +61,21 @@ type VariantCase struct {
 	Type *TypeRef // optional (nil means no payload)
 }
 
+// MapDesc represents map<K, V>. Its canonical ABI is identical to
+// list<tuple<K, V>>; Entry returns that tuple for reuse with list helpers.
+type MapDesc struct {
+	Key   TypeRef
+	Value TypeRef
+}
+
+func (MapDesc) isTypeDesc()  {}
+func (MapDesc) Kind() string { return "map" }
+func (m MapDesc) Entry() TupleDesc {
+	return TupleDesc{
+		Elements: []TypeRef{m.Key, m.Value},
+	}
+}
+
 // ListDesc represents a list (unbounded array).
 type ListDesc struct {
 	Element TypeRef
@@ -501,6 +516,13 @@ func readDefvaltypeDesc(buf []byte, off int, tag byte) (TypeDesc, int, error) {
 		// Future(Some(Primitive(U32))).
 		elem, off2, e := readOptValTypeRef(buf, off)
 		desc, off, err = FutureDesc{Element: elem}, off2, e
+	case 0x63: // map: vec(vec(valtype))
+		key, off2, e := readValTypeRef(buf, off)
+		if e != nil {
+			return nil, off2, e
+		}
+		val, off3, e := readValTypeRef(buf, off2)
+		desc, off, err = MapDesc{Key: key, Value: val}, off3, e
 	default:
 		return nil, off, fmt.Errorf("unsupported (M1): defvaltype tag %#x", tag)
 	}

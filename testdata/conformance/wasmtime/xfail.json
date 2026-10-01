@@ -107,7 +107,6 @@
   "instance__0026__L314": "resource identity or ownership semantics are incomplete",
   "instance__0027__L321": "resource identity or ownership semantics are incomplete",
   "linking__0005__L16": "114: instantiation succeeded, want trap containing \"was not found\"",
-  "map-types__0000__L3": "114: decode component: type section: type[0]: unsupported (M1): defvaltype tag 0x63",
   "memory64__0000__L24": "component execution semantics for this regression are incomplete",
   "modules__0000__L4": "general nested component graph execution is incomplete",
   "modules__0003__L25": "114: instantiation succeeded, want trap containing \"module export `the-export` not defined\"",

@@ -229,6 +229,24 @@
     "kind": "value",
     "size": 8
   },
+  "map_string_u32": {
+    "alignment": 4,
+    "flatten": [
+      "i32",
+      "i32"
+    ],
+    "kind": "value",
+    "size": 8
+  },
+  "map_u32_record": {
+    "alignment": 4,
+    "flatten": [
+      "i32",
+      "i32"
+    ],
+    "kind": "value",
+    "size": 8
+  },
   "option_record": {
     "alignment": 4,
     "flatten": [

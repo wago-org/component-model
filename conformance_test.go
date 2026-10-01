@@ -484,6 +484,29 @@ func conformanceValueForType(comp *binary.Component, ref binary.TypeRef, value c
 			}
 		}
 		return out, nil
+	case binary.MapDesc:
+		// Manifests encode map<K, V> as a list of 2-tuples.
+		var entries []conformanceValue
+		if err := json.Unmarshal(value.Value, &entries); err != nil || (value.Kind != "list" && value.Kind != "map") {
+			return nil, fmt.Errorf("expected map, got %q", value.Kind)
+		}
+		out := make([]component.Value, len(entries))
+		for i, entry := range entries {
+			var pair []conformanceValue
+			if err := json.Unmarshal(entry.Value, &pair); err != nil || entry.Kind != "tuple" || len(pair) != 2 {
+				return nil, fmt.Errorf("map entry %d: expected 2-tuple, got %q", i, entry.Kind)
+			}
+			key, err := conformanceValueForType(comp, typed.Key, pair[0])
+			if err != nil {
+				return nil, fmt.Errorf("map entry %d key: %w", i, err)
+			}
+			val, err := conformanceValueForType(comp, typed.Value, pair[1])
+			if err != nil {
+				return nil, fmt.Errorf("map entry %d value: %w", i, err)
+			}
+			out[i] = []component.Value{key, val}
+		}
+		return out, nil
 	case binary.TupleDesc:
 		var values []conformanceValue
 		if err := json.Unmarshal(value.Value, &values); err != nil || value.Kind != "tuple" {

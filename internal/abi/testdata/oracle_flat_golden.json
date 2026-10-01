@@ -1362,5 +1362,69 @@
     ],
     "mem_base": 1024,
     "mem_hex": ""
+  },
+  {
+    "name": "map_empty",
+    "type": "map_str_u32",
+    "core_vals": [
+      {
+        "kind": "i32",
+        "bits": 1024
+      },
+      {
+        "kind": "i32",
+        "bits": 0
+      }
+    ],
+    "mem_base": 1024,
+    "mem_hex": ""
+  },
+  {
+    "name": "map_str_u32_vals",
+    "type": "map_str_u32",
+    "core_vals": [
+      {
+        "kind": "i32",
+        "bits": 1024
+      },
+      {
+        "kind": "i32",
+        "bits": 3
+      }
+    ],
+    "mem_base": 1024,
+    "mem_hex": "240400000100000001000000250400000100000002000000260400000100000003000000616263"
+  },
+  {
+    "name": "map_u8_u64_vals",
+    "type": "map_u8_u64",
+    "core_vals": [
+      {
+        "kind": "i32",
+        "bits": 1024
+      },
+      {
+        "kind": "i32",
+        "bits": 2
+      }
+    ],
+    "mem_base": 1024,
+    "mem_hex": "0100000000000000ffffffffffffffffff000000000000000000000000000000"
+  },
+  {
+    "name": "map_nested_vals",
+    "type": "map_u32_list_u8",
+    "core_vals": [
+      {
+        "kind": "i32",
+        "bits": 1024
+      },
+      {
+        "kind": "i32",
+        "bits": 2
+      }
+    ],
+    "mem_base": 1024,
+    "mem_hex": "070000001804000003000000080000001b04000000000000010203"
   }
 ]

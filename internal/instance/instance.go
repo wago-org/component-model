@@ -760,6 +760,8 @@ func typeContainsResource(t binary.TypeDesc, resolve abi.Resolver, depth int) bo
 		return d.Prim == "error-context" // same reasoning, for error-context
 	case binary.ListDesc:
 		return typeRefContainsResource(&d.Element, resolve, depth)
+	case binary.MapDesc:
+		return typeRefContainsResource(&d.Key, resolve, depth) || typeRefContainsResource(&d.Value, resolve, depth)
 	case binary.OptionDesc:
 		return typeRefContainsResource(&d.Element, resolve, depth)
 	case binary.RecordDesc:
@@ -823,6 +825,8 @@ func typeContainsAsyncValueNested(t binary.TypeDesc, resolve abi.Resolver, depth
 	switch d := t.(type) {
 	case binary.ListDesc:
 		return typeRefContainsAsyncValueNested(&d.Element, resolve, depth)
+	case binary.MapDesc:
+		return typeRefContainsAsyncValueNested(&d.Key, resolve, depth) || typeRefContainsAsyncValueNested(&d.Value, resolve, depth)
 	case binary.OptionDesc:
 		return typeRefContainsAsyncValueNested(&d.Element, resolve, depth)
 	case binary.RecordDesc:
@@ -950,6 +954,22 @@ func (in *Instance) resolveArgHandlesDepth(v abi.Value, t binary.TypeDesc, depth
 			if out[i], err = in.resolveArgHandlesDepth(e, et, depth+1); err != nil {
 				return nil, err
 			}
+		}
+		return out, nil
+
+	case binary.MapDesc:
+		map_, ok := v.([]abi.Value)
+		if !ok {
+			return v, nil
+		}
+		out := make([]abi.Value, len(map_))
+		copy(out, map_)
+		for i, e := range map_ {
+			res, err := in.resolveArgHandlesDepth(e, d.Entry(), depth+1)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = res
 		}
 		return out, nil
 
@@ -2350,6 +2370,8 @@ func usesMemory(t binary.TypeDesc, resolve abi.Resolver) bool {
 	case binary.PrimitiveDesc:
 		return d.Prim == "string"
 	case binary.ListDesc:
+		return true
+	case binary.MapDesc:
 		return true
 	case binary.RecordDesc:
 		for _, f := range d.Fields {

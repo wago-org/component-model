@@ -273,6 +273,17 @@ func TestListWrongType(t *testing.T) {
 	}
 }
 
+func TestMapWrongType(t *testing.T) {
+	mem := make([]byte, 100)
+	desc := bintype.MapDesc{Key: bintype.TypeRef{Primitive: "string"}, Value: bintype.TypeRef{Primitive: "u32"}}
+
+	// Pass a non-list value
+	err := storeValue(mem, 0, desc, "not a map", nil, ReallocFunc(func(_, _, _, _ uint32) (uint32, error) { return 0, nil }))
+	if err == nil {
+		t.Error("expected error for storing non-list value as map")
+	}
+}
+
 func TestResultWrongType(t *testing.T) {
 	mem := make([]byte, 100)
 	desc := bintype.ResultDesc{
@@ -478,6 +489,20 @@ func TestListBoundsError(t *testing.T) {
 	_, err := loadList(mem, 10, desc, nil)
 	if err == nil {
 		t.Error("expected error for list bounds overflow")
+	}
+}
+
+func TestMapBoundsError(t *testing.T) {
+	mem := make([]byte, 50)
+	desc := bintype.MapDesc{Key: bintype.TypeRef{Primitive: "u32"}, Value: bintype.TypeRef{Primitive: "u32"}}
+
+	// Map pointer at 200, length 100 entries * 8 bytes: far beyond 50 bytes available
+	mem[10] = 200
+	mem[14] = 100
+
+	_, err := loadValue(mem, 10, desc, nil)
+	if err == nil {
+		t.Error("expected error for map bounds overflow")
 	}
 }
 

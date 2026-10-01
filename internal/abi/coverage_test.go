@@ -127,6 +127,7 @@ func TestErrorPropagationComposites(t *testing.T) {
 		{"record", binary.RecordDesc{Fields: []binary.RecordField{{Name: "f", Type: badRef}}}},
 		{"tuple", binary.TupleDesc{Elements: []binary.TypeRef{badRef}}},
 		{"list", binary.ListDesc{Element: badRef}},
+		{"map", binary.MapDesc{Key: badRef, Value: badRef}},
 		{"option", binary.OptionDesc{Element: badRef}},
 		{"variant", binary.VariantDesc{Cases: []binary.VariantCase{{Name: "c", Type: &badRef}}}},
 		{"result_ok", binary.ResultDesc{Ok: &badRef}},
@@ -139,8 +140,9 @@ func TestErrorPropagationComposites(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// list is special: its Size/Alignment/Flatten no longer inspect
 			// the element (dynamic list is fixed 8/4/[i32,i32]), so those must
-			// NOT error. We only assert error for the non-list composites here.
-			isList := tt.name == "list" || tt.name == "list_needs_resolver"
+			// NOT error. map shares list's layout. We only assert error for the
+			// non-list composites here.
+			isList := tt.name == "list" || tt.name == "list_needs_resolver" || tt.name == "map"
 
 			_, sErr := Size(tt.desc, nil)
 			_, aErr := Alignment(tt.desc, nil)

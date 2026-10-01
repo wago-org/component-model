@@ -61,6 +61,8 @@ type (
 	// ListDesc is an unbounded sequence. Its Value is a []Value -- or, for
 	// list<u8> specifically, a []byte, which lowers with a single copy.
 	ListDesc = binary.ListDesc
+	// MapDesc is a list<tuple<K, V>>.
+	MapDesc = binary.MapDesc
 	// TupleDesc is a positional product type. Its Value is a []Value.
 	TupleDesc = binary.TupleDesc
 	// FlagsDesc is a named bitset. Its Value is a uint32 of set bits.

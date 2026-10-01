@@ -243,6 +243,23 @@ func TestLoadValueListBadElementRef(t *testing.T) {
 	}
 }
 
+func TestStoreValueMapBadKeyRef(t *testing.T) {
+	mem := make([]byte, 8)
+	// MapDesc with an empty key TypeRef -> resolveType error via the entry tuple
+	desc := bintype.MapDesc{Key: bintype.TypeRef{}, Value: bintype.TypeRef{Primitive: "u32"}}
+	if err := storeValue(mem, 0, desc, []Value{}, nil, okRealloc); err == nil {
+		t.Error("expected error for storeValue map bad key ref")
+	}
+}
+
+func TestLoadValueMapBadValueRef(t *testing.T) {
+	mem := make([]byte, 8)
+	desc := bintype.MapDesc{Key: bintype.TypeRef{Primitive: "u32"}, Value: bintype.TypeRef{}}
+	if _, err := loadValue(mem, 0, desc, nil); err == nil {
+		t.Error("expected error for loadValue map bad value ref")
+	}
+}
+
 func TestStoreValueOptionBadElementRef(t *testing.T) {
 	mem := make([]byte, 8)
 	desc := bintype.OptionDesc{Element: bintype.TypeRef{}}

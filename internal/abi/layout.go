@@ -136,6 +136,8 @@ func alignmentUnchecked(t binary.TypeDesc, resolve Resolver) (uint32, error) {
 	// Composite types
 	case binary.ListDesc:
 		return alignmentList(desc, resolve)
+	case binary.MapDesc:
+		return alignmentMap(desc, resolve)
 	case binary.RecordDesc:
 		return alignmentRecord(desc, resolve)
 	case binary.VariantDesc:
@@ -186,6 +188,8 @@ func sizeUnchecked(t binary.TypeDesc, resolve Resolver) (uint32, error) {
 	// Composite types
 	case binary.ListDesc:
 		return sizeList(desc, resolve)
+	case binary.MapDesc:
+		return sizeMap(desc, resolve)
 	case binary.RecordDesc:
 		return sizeRecord(desc, resolve)
 	case binary.VariantDesc:
@@ -306,6 +310,11 @@ func alignmentList(_ binary.ListDesc, _ Resolver) (uint32, error) {
 	// A dynamic list is represented as pointer + length; its alignment is the
 	// pointer alignment (4 bytes), independent of the element type.
 	// (spec: alignment(list) = alignment(u32) = 4.)
+	return 4, nil
+}
+
+func alignmentMap(_ binary.MapDesc, _ Resolver) (uint32, error) {
+	// Map is just a special kind of list, so it mirrors `alignmentList`
 	return 4, nil
 }
 
@@ -446,6 +455,11 @@ func sizeList(_ binary.ListDesc, _ Resolver) (uint32, error) {
 	// A dynamic list is always represented as pointer + length = 8 bytes,
 	// regardless of the element type/size.
 	// (spec: size(list) = 8.)
+	return 8, nil
+}
+
+func sizeMap(_ binary.MapDesc, _ Resolver) (uint32, error) {
+	// Map is just a special kind of list, so it mirrors `sizeList`
 	return 8, nil
 }
 

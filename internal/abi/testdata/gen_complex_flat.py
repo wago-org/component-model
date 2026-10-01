@@ -11,7 +11,7 @@ composites, and list-of-composite strides. The Go oracle (flat_oracle_test.go)
 and the compiled-lower equivalence test (plan_test.go) both consume this
 battery, so any Go-side divergence from the spec surfaces as a golden mismatch.
 
-Run:  python3 internal/component/abi/testdata/gen_complex_flat.py
+Run:  python3 internal/abi/testdata/gen_complex_flat.py
 (idempotent: merges by name, then re-invokes gen_oracle_flat.py)
 """
 import json
@@ -25,6 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def prim(p): return {"kind": "primitive", "prim": p}
 def ref(n): return {"kind": "ref", "name": n}
 def lst(e): return {"kind": "list", "elem": e}
+def mp(k, v): return {"kind": "map", "key": k, "value": v}
 def rec(*fields): return {"kind": "record", "fields": [{"name": n, "type": t} for n, t in fields]}
 def var(*cases): return {"kind": "variant", "cases": [({"name": c[0]} if len(c) == 1 else {"name": c[0], "type": c[1]}) for c in cases]}
 def opt(e): return {"kind": "option", "elem": e}
@@ -90,6 +91,12 @@ COMPLEX_TYPES = [
     ("big_u64", U64),
     ("big_s64", S64),
     ("record_bigints", rec(("u", U64), ("s", S64))),
+    # map<K, V> lowers exactly like list<tuple<K, V>>
+    ("map_str_u32", mp(STR, U32)),
+    # entry tuple padding: u8 key, u64 value -> 16-byte stride, align 8
+    ("map_u8_u64", mp(U8, U64)),
+    # nested composite value (hoisted to a named list type)
+    ("map_u32_list_u8", mp(U32, lst(U8))),
 ]
 
 COMPLEX_VALUES = [
@@ -131,6 +138,10 @@ COMPLEX_VALUES = [
     ("big_s64", "s64_min", "-9223372036854775808"),
     ("big_s64", "s64_max", "9223372036854775807"),
     ("record_bigints", "rb_vals", ["0xdeadbeefcafef00d", "-9007199254740993"]),
+    ("map_str_u32", "map_empty", []),
+    ("map_str_u32", "map_str_u32_vals", [["a", 1], ["b", 2], ["c", 3]]),
+    ("map_u8_u64", "map_u8_u64_vals", [[1, "0xffffffffffffffff"], [255, 0]]),
+    ("map_u32_list_u8", "map_nested_vals", [[7, [1, 2, 3]], [8, []]]),
 ]
 
 
@@ -175,6 +186,8 @@ def _hoist_children(tdef, prefix):
         return {"kind": "variant", "cases": out}
     if k == "list":
         return {"kind": "list", "elem": hoist(tdef["elem"], f"{prefix}_e")}
+    if k == "map":
+        return {"kind": "map", "key": hoist(tdef["key"], f"{prefix}_k"), "value": hoist(tdef["value"], f"{prefix}_v")}
     if k == "tuple":
         return {"kind": "tuple", "elems": [hoist(e, f"{prefix}_{i}") for i, e in enumerate(tdef["elems"])]}
     if k == "option":

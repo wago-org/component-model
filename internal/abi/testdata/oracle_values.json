@@ -199,6 +199,21 @@
         "err": {"kind": "primitive", "prim": "u32"}
       },
       "value": {"isErr": true, "payload": 99}
+    },
+    {
+      "name": "map_empty",
+      "type": {"kind": "map", "key": {"kind": "primitive", "prim": "string"}, "value": {"kind": "primitive", "prim": "u32"}},
+      "value": []
+    },
+    {
+      "name": "map_string_u32",
+      "type": {"kind": "map", "key": {"kind": "primitive", "prim": "string"}, "value": {"kind": "primitive", "prim": "u32"}},
+      "value": [["a", 1], ["b", 2]]
+    },
+    {
+      "name": "map_u8_u64",
+      "type": {"kind": "map", "key": {"kind": "primitive", "prim": "u8"}, "value": {"kind": "primitive", "prim": "u64"}},
+      "value": [[1, 1099511627775], [255, 0]]
     }
   ]
 }

@@ -1459,6 +1459,7 @@ func TestIsTypeDescMarkers(t *testing.T) {
 	RecordDesc{}.isTypeDesc()
 	VariantDesc{}.isTypeDesc()
 	ListDesc{}.isTypeDesc()
+	MapDesc{}.isTypeDesc()
 	TupleDesc{}.isTypeDesc()
 	FlagsDesc{}.isTypeDesc()
 	EnumDesc{}.isTypeDesc()
@@ -1483,6 +1484,7 @@ func TestKindStrings(t *testing.T) {
 		{"record", RecordDesc{}, "record"},
 		{"variant", VariantDesc{}, "variant"},
 		{"list", ListDesc{}, "list"},
+		{"map", MapDesc{}, "map"},
 		{"tuple", TupleDesc{}, "tuple"},
 		{"flags", FlagsDesc{}, "flags"},
 		{"enum", EnumDesc{}, "enum"},
@@ -2761,5 +2763,56 @@ func TestReadSortidxTruncated(t *testing.T) {
 				t.Fatal("expected error")
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------
+// map<K, V> (defvaltype tag 0x63)
+// ---------------------------------------------------------------------
+
+func TestReadDefvaltypeDescMap(t *testing.T) {
+	// 0x73 = string, 0x79 = u32: map<string, u32>
+	d, off, err := readDefvaltypeDesc([]byte{0x73, 0x79}, 0, 0x63)
+	if err != nil {
+		t.Fatalf("readDefvaltypeDesc: %v", err)
+	}
+	if off != 2 {
+		t.Errorf("offset: got %d, want 2", off)
+	}
+	m, ok := d.(MapDesc)
+	if !ok {
+		t.Fatalf("got %T, want MapDesc", d)
+	}
+	if m.Key.Primitive != "string" || m.Value.Primitive != "u32" {
+		t.Errorf("got %+v, want map<string, u32>", m)
+	}
+}
+
+func TestReadDefvaltypeDescMapErrorPropagation(t *testing.T) {
+	t.Run("truncated key", func(t *testing.T) {
+		if _, _, err := readDefvaltypeDesc(nil, 0, 0x63); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("truncated value", func(t *testing.T) {
+		if _, _, err := readDefvaltypeDesc([]byte{0x73}, 0, 0x63); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+}
+
+func TestMapDescEntry(t *testing.T) {
+	idx := uint32(3)
+	m := MapDesc{Key: TypeRef{Primitive: "string"}, Value: TypeRef{TypeIndex: &idx}}
+	entry := m.Entry()
+	if len(entry.Elements) != 2 {
+		t.Fatalf("Entry: got %d elements, want 2", len(entry.Elements))
+	}
+	if entry.Elements[0].Primitive != "string" {
+		t.Errorf("Entry key: got %+v, want string", entry.Elements[0])
+	}
+	if entry.Elements[1].TypeIndex == nil || *entry.Elements[1].TypeIndex != idx {
+		t.Errorf("Entry value: got %+v, want type index %d", entry.Elements[1], idx)
 	}
 }

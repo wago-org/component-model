@@ -103,6 +103,9 @@ def build_type(spec, by_name):
     if kind == "list":
         return ref.ListType(build_type(spec["elem"], by_name))
 
+    if kind == "map":
+        return ref.MapType(build_type(spec["key"], by_name), build_type(spec["value"], by_name))
+
     if kind == "ref":
         return by_name[spec["name"]]
 
@@ -160,6 +163,7 @@ def convert_value(raw_value, t):
       - flags:   despecializes to per-label booleans -> {label: bool, ...}
       - enum:    despecializes to a no-payload variant -> {label: None}
       - list:    a plain Python list of converted elements
+      - map:     despecializes to list<tuple<K, V>> -> [{"0": k, "1": v}, ...]
       - string:  the (str, encoding, tagged_code_units) triple above
     """
     match t:
@@ -177,6 +181,9 @@ def convert_value(raw_value, t):
             return to_string_triple(str(raw_value))
         case ref.ListType(t=elem_t):
             return [convert_value(v, elem_t) for v in raw_value]
+        case ref.MapType(k=key_t, v=val_t):
+            # map<K, V> despecializes to list<tuple<K, V>>; raw_value is [[k, v], ...]
+            return convert_value(raw_value, ref.ListType(ref.TupleType([key_t, val_t])))
         case ref.RecordType(fields=fields):
             return {f.label: convert_value(v, f.t) for v, f in zip(raw_value, fields)}
         case ref.TupleType(ts=ts):

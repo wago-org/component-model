@@ -97,6 +97,9 @@ func loadValue(mem []byte, ptr uint32, t bintype.TypeDesc, resolve Resolver) (Va
 		}
 		return loadList(mem, ptr, elemType, resolve)
 
+	case bintype.MapDesc:
+		return loadList(mem, ptr, desc.Entry(), resolve)
+
 	case bintype.RecordDesc:
 		return loadRecord(mem, ptr, desc, resolve)
 
@@ -694,6 +697,9 @@ func storeValue(mem []byte, ptr uint32, t bintype.TypeDesc, v Value, resolve Res
 			return err
 		}
 		return storeList(mem, ptr, v, elemType, resolve, realloc)
+
+	case bintype.MapDesc:
+		return storeList(mem, ptr, v, desc.Entry(), resolve, realloc)
 
 	case bintype.RecordDesc:
 		return storeRecord(mem, ptr, v, desc, resolve, realloc)

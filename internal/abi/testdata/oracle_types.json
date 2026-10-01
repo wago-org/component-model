@@ -265,6 +265,34 @@
       }
     },
     {
+      "name": "map_string_u32",
+      "type": {
+        "kind": "map",
+        "key": {
+          "kind": "primitive",
+          "prim": "string"
+        },
+        "value": {
+          "kind": "primitive",
+          "prim": "u32"
+        }
+      }
+    },
+    {
+      "name": "map_u32_record",
+      "type": {
+        "kind": "map",
+        "key": {
+          "kind": "primitive",
+          "prim": "u32"
+        },
+        "value": {
+          "kind": "ref",
+          "name": "record_simple"
+        }
+      }
+    },
+    {
       "name": "option_u32",
       "type": {
         "kind": "option",

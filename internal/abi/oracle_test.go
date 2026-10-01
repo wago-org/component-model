@@ -12,7 +12,7 @@ package abi
 // To regenerate the golden file after editing oracle_types.json or updating
 // the vendored definitions.py:
 //
-//	python3 internal/component/abi/testdata/gen_oracle.py
+//	python3 internal/abi/testdata/gen_oracle.py
 //
 // oracle_types.json is the single contract both languages build from, so
 // there is no risk of the two batteries drifting apart independently.
@@ -44,6 +44,8 @@ type typeSpecNode struct {
 	Fields  []fieldSpecNode   `json:"fields"`
 	Cases   json.RawMessage   `json:"cases"` // []caseSpecNode (variant) or []string (enum)
 	Elem    json.RawMessage   `json:"elem"`
+	Key     json.RawMessage   `json:"key"`   // for kind == "map"
+	Value   json.RawMessage   `json:"value"` // for kind == "map"
 	Elems   []json.RawMessage `json:"elems"`
 	Names   []string          `json:"names"`
 	Ok      json.RawMessage   `json:"ok"`
@@ -164,6 +166,17 @@ func buildTypeDesc(raw json.RawMessage, nameToIndex map[string]uint32) (binary.T
 			return nil, fmt.Errorf("list element: %w", err)
 		}
 		return binary.ListDesc{Element: tr}, nil
+
+	case "map":
+		key, err := specToTypeRef(node.Key, nameToIndex)
+		if err != nil {
+			return nil, fmt.Errorf("map key: %w", err)
+		}
+		value, err := specToTypeRef(node.Value, nameToIndex)
+		if err != nil {
+			return nil, fmt.Errorf("map value: %w", err)
+		}
+		return binary.MapDesc{Key: key, Value: value}, nil
 
 	case "tuple":
 		elems := make([]binary.TypeRef, len(node.Elems))

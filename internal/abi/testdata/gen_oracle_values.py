@@ -142,6 +142,9 @@ def build_type(spec, by_name):
     if kind == "list":
         return ref.ListType(build_type(spec["elem"], by_name), None)
 
+    if kind == "map":
+        return ref.MapType(build_type(spec["key"], by_name), build_type(spec["value"], by_name))
+
     if kind == "tuple":
         return ref.TupleType([build_type(e, by_name) for e in spec["elems"]])
 
@@ -203,6 +206,9 @@ def convert_value_to_refabi(v, t):
         return (s, 'utf8', byte_len)
     elif isinstance(t, ref.ListType):
         return [convert_value_to_refabi(e, t.t) for e in v]
+    elif isinstance(t, ref.MapType):
+        # map<K, V> despecializes to list<tuple<K, V>>; v is [[k, v], ...]
+        return convert_value_to_refabi(v, ref.ListType(ref.TupleType([t.k, t.v])))
     elif isinstance(t, ref.RecordType):
         # v is array of field values in order
         rec = {}
@@ -273,6 +279,8 @@ def convert_value_from_refabi(v, t):
         return s
     elif isinstance(t, ref.ListType):
         return [convert_value_from_refabi(e, t.t) for e in v]
+    elif isinstance(t, ref.MapType):
+        return convert_value_from_refabi(v, ref.ListType(ref.TupleType([t.k, t.v])))
     elif isinstance(t, ref.RecordType):
         # Return array of field values in order
         result = []
@@ -355,6 +363,10 @@ def main():
 
         # Convert JSON value to reference ABI format
         refabi_value = convert_value_to_refabi(value_json, t)
+
+        # Zero memory so padding bytes don't carry stale data from the
+        # previous entry (the Go side stores into fresh memory).
+        mem_bytes[:] = bytes(len(mem_bytes))
 
         # Create allocator and context
         alloc = BumpAllocator(start=1024, mem=mem_bytes)

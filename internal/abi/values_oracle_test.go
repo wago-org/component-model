@@ -10,7 +10,7 @@ package abi
 //
 // To regenerate the golden file after editing oracle_values.json:
 //
-//	python3 internal/component/abi/testdata/gen_oracle_values.py
+//	python3 internal/abi/testdata/gen_oracle_values.py
 //
 // oracle_values.json is the single contract both languages build from.
 
@@ -81,6 +81,23 @@ func jsonToValue(jsonVal any, t bintype.TypeDesc, resolve Resolver) (Value, erro
 			v, err := jsonToValue(elem, elemType, resolve)
 			if err != nil {
 				return nil, fmt.Errorf("jsonToValue list[%d]: %w", i, err)
+			}
+			result[i] = v
+		}
+		return result, nil
+
+	case bintype.MapDesc:
+		// A map value is a list of [key, value] entries.
+		jsonList, ok := jsonVal.([]any)
+		if !ok {
+			return nil, fmt.Errorf("jsonToValue: expected map, got %T", jsonVal)
+		}
+		entry := desc.Entry()
+		result := make([]Value, len(jsonList))
+		for i, elem := range jsonList {
+			v, err := jsonToValue(elem, entry, resolve)
+			if err != nil {
+				return nil, fmt.Errorf("jsonToValue map[%d]: %w", i, err)
 			}
 			result[i] = v
 		}

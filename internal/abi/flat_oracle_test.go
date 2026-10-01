@@ -38,7 +38,7 @@ import (
 // - testdata/oracle_flat_golden.json: expected LowerFlat results from Python
 //
 // To regenerate the golden file:
-//   python3 internal/component/abi/testdata/gen_oracle_flat.py
+//   python3 internal/abi/testdata/gen_oracle_flat.py
 
 type flatOracleGoldenEntry struct {
 	Name     string                `json:"name"`
@@ -331,6 +331,8 @@ func specToFlatTypeDesc(spec json.RawMessage, nameToIndex map[string]uint32) (bi
 		Cases  []json.RawMessage `json:"cases"`
 		Elems  []json.RawMessage `json:"elems"`
 		Elem   json.RawMessage   `json:"elem"`
+		Key    json.RawMessage   `json:"key"`
+		Value  json.RawMessage   `json:"value"`
 		Names  []string          `json:"names"`
 		Ok     json.RawMessage   `json:"ok"`
 		Err    json.RawMessage   `json:"err"`
@@ -350,6 +352,17 @@ func specToFlatTypeDesc(spec json.RawMessage, nameToIndex map[string]uint32) (bi
 			return nil, fmt.Errorf("list element: %w", err)
 		}
 		return binary.ListDesc{Element: elemRef}, nil
+
+	case "map":
+		keyRef, err := specToFlatTypeRef(node.Key, nameToIndex)
+		if err != nil {
+			return nil, fmt.Errorf("map key: %w", err)
+		}
+		valueRef, err := specToFlatTypeRef(node.Value, nameToIndex)
+		if err != nil {
+			return nil, fmt.Errorf("map value: %w", err)
+		}
+		return binary.MapDesc{Key: keyRef, Value: valueRef}, nil
 
 	case "record":
 		var fields []binary.RecordField
@@ -487,6 +500,23 @@ func convertTestValue(rawValue any, t binary.TypeDesc, resolve Resolver) (Value,
 		result := make([]Value, len(list))
 		for i, val := range list {
 			v, err := convertTestValue(val, elemType, resolve)
+			if err != nil {
+				return nil, err
+			}
+			result[i] = v
+		}
+		return result, nil
+
+	case binary.MapDesc:
+		// A map value is a list of [key, value] entries.
+		list, ok := rawValue.([]any)
+		if !ok {
+			return nil, fmt.Errorf("cannot convert value %v to map", rawValue)
+		}
+		entry := desc.Entry()
+		result := make([]Value, len(list))
+		for i, val := range list {
+			v, err := convertTestValue(val, entry, resolve)
 			if err != nil {
 				return nil, err
 			}

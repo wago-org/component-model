@@ -69,6 +69,42 @@
     "mem_len": 12,
     "ptr": 1024
   },
+  "map_empty": {
+    "loaded_value": [],
+    "mem_hex": "",
+    "mem_len": 0,
+    "ptr": 1024
+  },
+  "map_string_u32": {
+    "loaded_value": [
+      [
+        "\u0000\u0004",
+        1
+      ],
+      [
+        "b",
+        2
+      ]
+    ],
+    "mem_hex": "0004000002000000010000001904000001000000020000006162",
+    "mem_len": 26,
+    "ptr": 1024
+  },
+  "map_u8_u64": {
+    "loaded_value": [
+      [
+        0,
+        1099511627775
+      ],
+      [
+        255,
+        0
+      ]
+    ],
+    "mem_hex": "0004000002000000ffffffffff000000ff000000000000000000000000000000",
+    "mem_len": 32,
+    "ptr": 1024
+  },
   "option_none": {
     "loaded_value": null,
     "mem_hex": "",

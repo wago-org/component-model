@@ -399,6 +399,43 @@ func TestListDynamicSizeAndAlignment(t *testing.T) {
 	}
 }
 
+func TestMapDynamicSizeAndAlignment(t *testing.T) {
+	// map<K, V> has list<tuple<K, V>>'s layout: pointer + length = 8 bytes,
+	// alignment 4, regardless of the key and value types.
+	tests := []struct {
+		name     string
+		key      binary.TypeRef
+		value    binary.TypeRef
+		wantSize uint32
+		wantAlgn uint32
+	}{
+		{"map<u64, u64>", binary.TypeRef{Primitive: "u64"}, binary.TypeRef{Primitive: "u64"}, 8, 4},
+		{"map<string, u8>", binary.TypeRef{Primitive: "string"}, binary.TypeRef{Primitive: "u8"}, 8, 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := binary.MapDesc{Key: tt.key, Value: tt.value}
+
+			size, err := Size(m, noResolver)
+			if err != nil {
+				t.Fatalf("Size: %v", err)
+			}
+			if size != tt.wantSize {
+				t.Errorf("Size: got %d, want %d", size, tt.wantSize)
+			}
+
+			align, err := Alignment(m, noResolver)
+			if err != nil {
+				t.Fatalf("Alignment: %v", err)
+			}
+			if align != tt.wantAlgn {
+				t.Errorf("Alignment: got %d, want %d", align, tt.wantAlgn)
+			}
+		})
+	}
+}
+
 // --- Discriminant Type Tests ---
 
 func TestDiscriminantType(t *testing.T) {

@@ -24,6 +24,7 @@ package abi
 //   - option<T> -> nil (none) or the inner value (some)
 //   - result<T, E> -> ResultValue
 //   - own<R> / borrow<R> -> uint32 (handle)
+//   - map<K, V> -> [][]Value{K, V} (identical to list<tuple<K, V>>)
 type Value = any
 
 // VariantValue represents a variant type value (discriminated union).

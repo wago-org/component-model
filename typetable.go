@@ -63,6 +63,11 @@ func (t *TypeTable) List(elem TypeRef) TypeRef {
 	return t.Add(binary.ListDesc{Element: elem})
 }
 
+// Map interns list<tuple<K, V>>.
+func (t *TypeTable) Map(key, value TypeRef) TypeRef {
+	return t.Add(binary.MapDesc{Key: key, Value: value})
+}
+
 // Option interns option<elem>.
 func (t *TypeTable) Option(elem TypeRef) TypeRef {
 	return t.Add(binary.OptionDesc{Element: elem})

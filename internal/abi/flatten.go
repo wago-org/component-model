@@ -24,6 +24,8 @@ func Flatten(t binary.TypeDesc, resolve Resolver) ([]string, error) {
 	// Composite types
 	case binary.ListDesc:
 		return flattenList(desc, resolve)
+	case binary.MapDesc:
+		return flattenMap(desc, resolve)
 	case binary.RecordDesc:
 		return flattenRecord(desc, resolve)
 	case binary.VariantDesc:
@@ -173,6 +175,11 @@ func flattenPrimitive(prim string) ([]string, error) {
 func flattenList(_ binary.ListDesc, _ Resolver) ([]string, error) {
 	// Dynamic list: pointer + length (as i32 + i32)
 	// Note: we don't use elemFlat for dynamic lists; fixed-length lists would use it.
+	return flatKindsStringPtrs, nil
+}
+
+func flattenMap(_ binary.MapDesc, _ Resolver) ([]string, error) {
+	// Map is just a special kind of list, so it mirrors `flattenList`
 	return flatKindsStringPtrs, nil
 }
 
