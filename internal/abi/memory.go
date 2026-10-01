@@ -1012,6 +1012,9 @@ func allocStoreList(mem []byte, list []Value, elemType bintype.TypeDesc, resolve
 	if err != nil {
 		return 0, 0, fmt.Errorf("realloc failed: %w", err)
 	}
+	if newPtr%elemAlign != 0 {
+		return 0, 0, fmt.Errorf("realloc return: %s pointer %d not aligned to %d", elemType.Kind(), newPtr, elemAlign)
+	}
 
 	if _, _, err := checkedRange(len(mem), newPtr, byteLen); err != nil {
 		return 0, 0, fmt.Errorf("allocated memory out of bounds: ptr=%d size=%d", newPtr, byteLen)

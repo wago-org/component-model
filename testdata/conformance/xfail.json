@@ -539,7 +539,6 @@
   "values__post-return__0015__L215/action/L216": "required canonical ABI trap is not enforced",
   "values__post-return__0029__L229/action/L230": "required canonical ABI trap is not enforced",
   "values__post-return__0043__L243/action/L244": "required canonical ABI trap is not enforced",
-  "values__realloc__0006__L93/action/L94": "required canonical ABI trap is not enforced",
   "values__transcode__0000__L7/action/L113": "canonical transcoding semantics are incomplete",
   "values__transcode__0002__L117/action/L201": "217: call: component/instance: export \"run\": call core func \"run\": component/instance: host import \"join\" \"\": component/instance: export \"join\": call core func \"join\": wasm trap...",
   "values__transcode__0004__L205/action/L319": "canonical transcoding semantics are incomplete",
