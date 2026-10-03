@@ -39,6 +39,17 @@ func TestDecodeRealComponent_Preamble(t *testing.T) {
 	}
 }
 
+func FuzzDecodeNeverPanics(f *testing.F) {
+	f.Add([]byte{})
+	f.Add([]byte{0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00})
+	if data, err := fixtureFS.ReadFile("testdata/host_component.wasm"); err == nil {
+		f.Add(data)
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, _ = Decode(bytes.NewReader(data))
+	})
+}
+
 func TestDecodeRealComponent_Imports(t *testing.T) {
 	c := loadFixture(t)
 	if len(c.Imports) != 1 {
