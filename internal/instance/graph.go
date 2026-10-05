@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -315,7 +316,14 @@ func instantiateGraph(ctx context.Context, r wazy.Runtime, comp *binary.Componen
 		}
 	}
 	fail := func(err error) (*Instance, error) {
+		// Initializers can acquire host resources before graph construction
+		// fails. Drain those resources before closing their core modules, just
+		// as Instance.Close does, even when the caller canceled setup.
+		closeErr := resources.close(context.WithoutCancel(ctx))
 		closeAll()
+		if closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
 		return nil, err
 	}
 
