@@ -57,7 +57,7 @@ func consumerProvider(ref **wagoplugin.Ref[component.Service]) wago.PluginProvid
 	}
 }
 
-func pluginSet(t *testing.T, providers []wago.PluginProvider, config json.RawMessage) wago.PluginSet {
+func pluginSet(t testing.TB, providers []wago.PluginProvider, config json.RawMessage) wago.PluginSet {
 	t.Helper()
 	set := wago.PluginSet{Providers: providers}
 	for _, provider := range providers {
@@ -97,7 +97,7 @@ func pluginSet(t *testing.T, providers []wago.PluginProvider, config json.RawMes
 	return set
 }
 
-func loadService(t *testing.T, config json.RawMessage) (*wago.Runtime, *wagoplugin.Ref[component.Service]) {
+func loadService(t testing.TB, config json.RawMessage) (*wago.Runtime, *wagoplugin.Ref[component.Service]) {
 	t.Helper()
 	var ref *wagoplugin.Ref[component.Service]
 	providers := []wago.PluginProvider{component.Provider(), consumerProvider(&ref)}
