@@ -161,13 +161,14 @@ callback first, then close the cache, then close the Wago runtime.
 
 ## Authorities
 
-The provider asks for three required authorities:
+The provider asks for four required authorities:
 
 | Authority | Why it is needed |
 | --- | --- |
 | `core.module.compile` | Compile core Wasm modules embedded in a component. |
 | `core.instance.instantiate` | Instantiate and own the core-module graph, within reviewed positive instance and memory limits. |
 | `core.funcref.create` | Build typed host references for Canonical ABI bridges. |
+| `host.caller.identify` | Observe cancellation and deadlines of the active synchronous host call. |
 
 These handles do not expose plugin registration, runtime policy, hooks, or
 arbitrary runtime lifecycle control. A user may narrow the requested positive

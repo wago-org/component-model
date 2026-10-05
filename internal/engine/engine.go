@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"math"
 	goruntime "runtime"
+	"sync"
+	"time"
 
 	"github.com/wago-org/component-model/internal/engine/expctxkeys"
 	core "github.com/wago-org/wago"
@@ -144,10 +146,56 @@ type runtimeAdapter struct {
 	compiler     *core.CoreModuleCompiler
 	instantiator *core.CoreInstanceInstantiator
 	funcrefs     *core.CoreFuncRefFactory
+	callers      *core.CallerResolver
 }
 
-func Wrap(compiler *core.CoreModuleCompiler, instantiator *core.CoreInstanceInstantiator, funcrefs *core.CoreFuncRefFactory) Runtime {
-	return &runtimeAdapter{compiler: compiler, instantiator: instantiator, funcrefs: funcrefs}
+func Wrap(compiler *core.CoreModuleCompiler, instantiator *core.CoreInstanceInstantiator, funcrefs *core.CoreFuncRefFactory, callers *core.CallerResolver) Runtime {
+	return &runtimeAdapter{compiler: compiler, instantiator: instantiator, funcrefs: funcrefs, callers: callers}
+}
+
+// hostContextSource keeps link-time values separate from the active invocation.
+// It is shared by a module's import bridges, rather than copied on every call.
+type hostContextSource struct {
+	values  context.Context
+	callers *core.CallerResolver
+}
+
+// hostCallContext resolves the scoped invocation only if an import queries
+// cancellation. Imports that only use values do not allocate Wago's invocation
+// state. Once also makes concurrent Context method calls safe.
+type hostCallContext struct {
+	source *hostContextSource
+	caller core.Caller
+	once   sync.Once
+	active context.Context
+}
+
+var expiredHostContext = func() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}()
+
+func (c *hostCallContext) invocation() context.Context {
+	c.once.Do(func() {
+		ctx, err := c.source.callers.InvocationContext(c.caller)
+		if err != nil {
+			// A first query after callback exit must not revive the old context.
+			ctx = expiredHostContext
+		}
+		c.active = ctx
+	})
+	return c.active
+}
+
+func (c *hostCallContext) Deadline() (time.Time, bool) { return c.invocation().Deadline() }
+func (c *hostCallContext) Done() <-chan struct{}       { return c.invocation().Done() }
+func (c *hostCallContext) Err() error                  { return c.invocation().Err() }
+func (c *hostCallContext) Value(key any) any {
+	if _, ok := key.(activeCallerKey); ok {
+		return c.caller
+	}
+	return c.source.values.Value(key)
 }
 
 type compiledModule struct{ mod *core.Module }
@@ -216,7 +264,7 @@ func (r *runtimeAdapter) instantiateModule(ctx context.Context, c CompiledModule
 	if !ok || cm == nil || cm.mod == nil {
 		return nil, fmt.Errorf("component: compiled module belongs to another runtime")
 	}
-	if r == nil || r.instantiator == nil || r.funcrefs == nil {
+	if r == nil || r.instantiator == nil || r.funcrefs == nil || r.callers == nil {
 		return nil, fmt.Errorf("component: incomplete core execution handles")
 	}
 	instantiateOpts := make([]core.InstantiateOption, 0, len(cm.mod.Imports())+1)
@@ -228,6 +276,7 @@ func (r *runtimeAdapter) instantiateModule(ctx context.Context, c CompiledModule
 		}
 	}
 	resolver := resolverFromContext(ctx)
+	var hostContexts *hostContextSource
 	for _, spec := range cm.mod.Imports() {
 		if resolver == nil {
 			continue
@@ -243,6 +292,9 @@ func (r *runtimeAdapter) instantiateModule(ctx context.Context, c CompiledModule
 				continue
 			}
 			resolvedFuncs[coreImportIdentity{module: spec.Module, name: spec.Name}] = fn
+			if hostContexts == nil {
+				hostContexts = &hostContextSource{values: ctx, callers: r.callers}
+			}
 			var host any
 			if hf, ok := fn.(*hostFunction); ok {
 				host = func(caller core.Caller, call core.HostCall) {
@@ -264,14 +316,15 @@ func (r *runtimeAdapter) instantiateModule(ctx context.Context, c CompiledModule
 					}()
 					stack := make([]uint64, max(len(params), len(results)))
 					copy(stack, params)
-					callCtx := context.WithValue(ctx, activeCallerKey{}, caller)
+					callCtx := &hostCallContext{source: hostContexts, caller: caller}
 					hf.fn.Call(callCtx, callerModule{caller: caller}, stack)
 					copy(results, stack)
 				}
 			} else if wf, ok := fn.(*wasmFunction); ok {
 				host = func(caller core.Caller, call core.HostCall) {
 					params, results := call.ParamSlots(), call.ResultSlots()
-					out, callErr := wf.mod.in.InvokeFromHost(ctx, caller, wf.name, params...)
+					callCtx := &hostCallContext{source: hostContexts, caller: caller}
+					out, callErr := wf.mod.in.InvokeFromHost(callCtx, caller, wf.name, params...)
 					if callErr != nil {
 						panic(core.HostTrap{Err: callErr})
 					}

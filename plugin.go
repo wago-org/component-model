@@ -82,6 +82,11 @@ func Definition() wago.PluginDefinition {
 				Mode:   wago.AuthorityRequired,
 				Reason: "bridge Canonical ABI lifts and lowers through typed host function references",
 			},
+			{
+				Name:   wago.AuthorityHostCallerIdentify,
+				Mode:   wago.AuthorityRequired,
+				Reason: "observe cancellation and deadlines of the active component host call",
+			},
 		},
 		ConfigSchema: append(json.RawMessage(nil), configSchema...),
 		Provides:     []wago.ContractSpec{Contract.Spec()},
@@ -135,7 +140,11 @@ func (*componentPlugin) Register(reg *wago.Registrar) error {
 	if err != nil {
 		return err
 	}
-	service := &runtimeService{engine: engine.Wrap(compiler, instantiator, funcrefs)}
+	callers, err := reg.HostCallers()
+	if err != nil {
+		return err
+	}
+	service := &runtimeService{engine: engine.Wrap(compiler, instantiator, funcrefs, callers)}
 	return wagoplugin.Provide(reg, Contract, Service(service))
 }
 

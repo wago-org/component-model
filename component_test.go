@@ -293,6 +293,7 @@ func TestDefinitionUsesExactAuthoritiesAndVersionedContract(t *testing.T) {
 		wago.AuthorityCoreModuleCompile,
 		wago.AuthorityCoreInstanceInstantiate,
 		wago.AuthorityCoreFuncRefCreate,
+		wago.AuthorityHostCallerIdentify,
 	}
 	if len(definition.Authorities) != len(wantAuthorities) {
 		t.Fatalf("authorities = %#v", definition.Authorities)
