@@ -51,6 +51,12 @@
             "mode": "required",
             "reason": "compile the core WebAssembly modules embedded in a component",
             "scope": {}
+          },
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "observe cancellation and deadlines of the active component host call",
+            "scope": {}
           }
         ],
         "configSchema": {
@@ -65,7 +71,7 @@
           }
         ]
       },
-      "definitionDigest": "sha256:0fb45da952aa50aed4452d6c16df79577186911e6b1191198b6116bb36cd7c0f"
+      "definitionDigest": "sha256:f67c4914027bd3dd7b9b114caf0b6e36b5ffe335956a36905ec23d3a000facd3"
     }
   ]
 }
